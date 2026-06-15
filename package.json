@@ -1,0 +1,110 @@
+{
+  "name": "@resume-builder/llm-core",
+  "version": "0.1.0",
+  "description": "Domain-agnostic multi-provider LLM abstraction: provider registry/factory, generic prompt-template registry, structured (Zod) output, and token usage tracking.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": [
+    "./src/providers/register-builtins.ts",
+    "./src/providers/openai.ts",
+    "./src/providers/grok.ts",
+    "./src/providers/perplexity.ts",
+    "./src/providers/gemini.ts",
+    "./src/providers/ollama.ts",
+    "./src/providers/anthropic.ts",
+    "./dist/providers/register-builtins.js",
+    "./dist/providers/register-builtins.cjs",
+    "./dist/providers/openai.js",
+    "./dist/providers/openai.cjs",
+    "./dist/providers/grok.js",
+    "./dist/providers/grok.cjs",
+    "./dist/providers/perplexity.js",
+    "./dist/providers/perplexity.cjs",
+    "./dist/providers/gemini.js",
+    "./dist/providers/gemini.cjs",
+    "./dist/providers/ollama.js",
+    "./dist/providers/ollama.cjs",
+    "./dist/providers/anthropic.js",
+    "./dist/providers/anthropic.cjs"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./providers": {
+      "types": "./dist/providers/index.d.ts",
+      "import": "./dist/providers/index.js",
+      "require": "./dist/providers/index.cjs"
+    },
+    "./providers/openai-compatible": {
+      "types": "./dist/providers/openai-compatible.d.ts",
+      "import": "./dist/providers/openai-compatible.js",
+      "require": "./dist/providers/openai-compatible.cjs"
+    },
+    "./providers/register-builtins": {
+      "types": "./dist/providers/register-builtins.d.ts",
+      "import": "./dist/providers/register-builtins.js",
+      "require": "./dist/providers/register-builtins.cjs"
+    },
+    "./prompts": {
+      "types": "./dist/prompts/index.d.ts",
+      "import": "./dist/prompts/index.js",
+      "require": "./dist/prompts/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "type-check": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "handlebars": "^4.7.8",
+    "uuid": "^13.0.0",
+    "zod": "^4.1.13"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
+    "@google/genai": "^0.3.1",
+    "openai": "^6.10.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@google/genai": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
+    "@google/genai": "^0.3.1",
+    "@types/node": "^20",
+    "@types/uuid": "^10.0.0",
+    "eslint": "^9",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-unused-imports": "^4.3.0",
+    "openai": "^6.10.0",
+    "prettier": "^3.7.4",
+    "tsup": "^8.3.0",
+    "typescript": "^5",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^4.0.16"
+  }
+}
