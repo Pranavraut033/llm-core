@@ -1,5 +1,5 @@
 {
-  "name": "@resume-builder/llm-core",
+  "name": "@pranavraut033/llm-core",
   "version": "0.1.0",
   "description": "Domain-agnostic multi-provider LLM abstraction: provider registry/factory, generic prompt-template registry, structured (Zod) output, and token usage tracking.",
   "license": "MIT",
