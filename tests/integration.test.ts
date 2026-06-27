@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { LLMCoreConfig } from "../src/config";
+import "./helpers/ambientProviderIds";
 import { DUMMY_RESULT_TEXT, DummyProvider } from "./helpers/dummyProvider";
 import { resolveTemplate } from "../src/prompts/resolver";
 import { PromptTemplate } from "../src/prompts/types";

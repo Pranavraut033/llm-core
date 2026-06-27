@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { LLMCoreConfig } from "../src/config";
+import "./helpers/ambientProviderIds";
 import { DummyProvider } from "./helpers/dummyProvider";
 import { getProviderInstance } from "../src/providers/factory";
 import { getRegistry } from "../src/providers/registry";
+import { ProviderId } from "../src/providerType";
 
-function registerDummy(type: string, requiresAuth: boolean): void {
+function registerDummy(type: ProviderId, requiresAuth: boolean): void {
   getRegistry().register(
     type,
     { name: type, requiresAuth },
@@ -55,8 +57,10 @@ describe("getProviderInstance", () => {
       keyResolver: () => undefined,
     };
 
+    // Simulates an untyped/dynamic id that was never declared in
+    // ProviderIdRegistry — the runtime guard is the safety net here.
     await expect(
-      getProviderInstance("totally-unknown", config)
+      getProviderInstance("totally-unknown" as ProviderId, config)
     ).rejects.toThrow(/is not registered/);
   });
 
