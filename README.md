@@ -17,9 +17,12 @@ just resumes.
   - a `keyResolver` to resolve API keys/credentials per provider,
   - an optional `onUsage` sink to persist token-usage records,
   - an optional `logger`.
-- **Open provider IDs.** `ProviderId` is just `string`. The six built-in
-  providers are exposed as `BUILTIN_PROVIDERS` constants, but you can
-  register your own provider under any id via `LLMProvider.register(...)`.
+- **Typed, extensible provider IDs.** `ProviderId` is `keyof ProviderIdRegistry`
+  — not a plain `string`. The six built-ins are seeded into that interface
+  and exposed as `BUILTIN_PROVIDERS` constants. To register your own
+  provider with full type safety, augment `ProviderIdRegistry` via
+  TypeScript declaration merging, then call `LLMProvider.register(...)`
+  with that id — see [Custom providers](#custom-providers) below.
 - **Opt-in registration.** Built-in providers are NOT registered by
   importing `@resume-builder/llm-core`. Import
   `@resume-builder/llm-core/providers/register-builtins` (once, for its side
@@ -85,22 +88,8 @@ const config: LLMCoreConfig = {
 import "@resume-builder/llm-core/providers/register-builtins";
 ```
 
-Or register only what you need / your own custom provider:
-
-```ts
-import { LLMProvider } from "@resume-builder/llm-core";
-
-class MyCustomProvider extends LLMProvider {
-  // ... implement providerType, streamSupported, fetchModels,
-  // validateConnection, runLLM, runStructuredLLM
-}
-
-LLMProvider.register(
-  "my-company-llm",
-  { name: "My Company LLM", requiresAuth: true },
-  (apiKey) => new MyCustomProvider(apiKey)
-);
-```
+Or register only what you need / your own custom provider — see
+[Custom providers](#custom-providers) for the typed registration step.
 
 ### 3. Get a provider instance and call it
 
@@ -154,6 +143,47 @@ const { result, usage } = await provider.runStructuredLLM(
 
 // result is typed as { sections: string[] }
 ```
+
+## Custom providers
+
+`ProviderId` is `keyof ProviderIdRegistry`, not a plain `string` — registering
+a provider under an undeclared id is a compile-time error. Declare your id
+once via TypeScript declaration merging, then register and use it like any
+built-in:
+
+```ts
+// e.g. in a project-wide ambient file such as src/llm-providers.d.ts
+declare module "@resume-builder/llm-core" {
+  interface ProviderIdRegistry {
+    "my-company-llm": true;
+  }
+}
+```
+
+```ts
+import { LLMProvider } from "@resume-builder/llm-core";
+
+class MyCustomProvider extends LLMProvider {
+  // ... implement providerType, streamSupported, fetchModels,
+  // validateConnection, runLLM, runStructuredLLM
+}
+
+// "my-company-llm" type-checks (and autocompletes) because of the
+// augmentation above — any other string is rejected.
+LLMProvider.register(
+  "my-company-llm",
+  { name: "My Company LLM", requiresAuth: true },
+  (apiKey) => new MyCustomProvider(apiKey)
+);
+
+const provider = await getProviderInstance("my-company-llm", config);
+```
+
+The augmentation is pure TypeScript — it has no runtime effect and isn't
+required for the code to run (e.g. under plain `vitest`/`tsx`/`ts-node`'s
+transpile-only modes). It exists purely so `tsc`/your editor catch a typo'd
+or unregistered provider id before it reaches `LLMProvider.register` or
+`getProviderInstance` at runtime.
 
 ## Token usage
 

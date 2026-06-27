@@ -23,9 +23,17 @@ code, or `@/` path aliases from the parent repo.
   provider's `runLLM`/`runStructuredLLM`/`fetchModels`/`validateConnection`.
   API keys, persistence, and logging are all injected via `LLMCoreConfig`
   (`keyResolver`, `onUsage`, `logger`).
-- **Open `ProviderId`.** It's `string`. Built-ins are exposed via
-  `BUILTIN_PROVIDERS`; consumers may register arbitrary custom providers
-  with `LLMProvider.register(id, metadata, ctor)`.
+- **Typed, module-augmentable `ProviderId`.** It's `keyof ProviderIdRegistry`
+  (`src/providerType.ts`), not a plain `string` — registering or looking up
+  an undeclared id is a compile-time error. Built-ins are seeded into
+  `ProviderIdRegistry` and exposed via `BUILTIN_PROVIDERS`. Consumers add a
+  custom provider id by augmenting `ProviderIdRegistry` via declaration
+  merging (`declare module "@resume-builder/llm-core" { interface
+ProviderIdRegistry { "my-id": true } }`), then calling
+  `LLMProvider.register(id, metadata, ctor)`. Don't widen `ProviderId` back
+  to `string` — that's exactly the safety this interface exists to provide.
+  Tests that need a custom id augment it via
+  `tests/helpers/ambientProviderIds.ts` (see Testing notes below).
 - **Opt-in registration.** Importing the main entry point (`src/index.ts`)
   must NOT register any providers as a side effect. Built-in providers are
   registered only by importing `./providers/register-builtins` (or by the
@@ -90,6 +98,13 @@ Before committing: `npm run lint:fix && npm run format && npm run type-check && 
 - `tests/helpers/dummyProvider.ts` provides a network-free `DummyProvider`
   for registry/factory/integration tests — prefer it over hitting a real
   provider SDK.
+- `tests/helpers/ambientProviderIds.ts` augments `ProviderIdRegistry` with
+  every custom/fixture provider id used across the test suite (e.g.
+  `"my-custom-llm"`, `"integration-dummy"`) — import it for side effects in
+  any test file that registers a custom id. Ids meant to test the
+  _unregistered/typo_ runtime guard (e.g. `"totally-unknown"`) should stay
+  undeclared and use an explicit `as ProviderId` cast at the call site
+  instead, since that's the realistic failure mode being tested.
 - After changing the `exports` map, entry points, or any ESM/CJS interop
   (e.g. how a CJS dependency like `handlebars` is imported), validate with
   `npm pack` + a scratch consumer script in both ESM and CJS — `tsc`/build
