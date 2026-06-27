@@ -183,9 +183,10 @@ export function validateTemplate<
   const warnings: string[] = [];
 
   try {
-    // Try to compile templates
-    Handlebars.compile(template.systemPrompt);
-    Handlebars.compile(template.userPrompt);
+    // Handlebars.compile() parses lazily (only on first invocation), so
+    // use parse() here to actually surface syntax errors.
+    Handlebars.parse(template.systemPrompt);
+    Handlebars.parse(template.userPrompt);
   } catch (error) {
     errors.push(`Template compilation failed: ${error}`);
     return { valid: false, errors, warnings };
