@@ -24,9 +24,13 @@ export interface ProviderIdRegistry {
   openai: true;
   gemini: true;
   grok: true;
+  groq: true;
   perplexity: true;
   ollama: true;
   anthropic: true;
+  deepseek: true;
+  mistral: true;
+  openrouter: true;
 }
 
 /**
@@ -46,9 +50,13 @@ export const BUILTIN_PROVIDERS = {
   OPENAI: "openai",
   GEMINI: "gemini",
   GROK: "grok",
+  GROQ: "groq",
   PERPLEXITY: "perplexity",
   OLLAMA: "ollama",
   ANTHROPIC: "anthropic",
+  DEEPSEEK: "deepseek",
+  MISTRAL: "mistral",
+  OPENROUTER: "openrouter",
 } as const satisfies Record<string, ProviderId>;
 
 /**

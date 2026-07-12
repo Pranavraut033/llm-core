@@ -10,3 +10,5 @@ export type {
   OpenAITool,
   OpenAIMessageTool,
 } from "./openaiCompatibleProvider";
+export { GenericOpenAICompatibleProvider } from "./genericOpenAICompatible";
+export type { GenericOpenAICompatibleConfig } from "./genericOpenAICompatible";

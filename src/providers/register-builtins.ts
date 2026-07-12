@@ -21,8 +21,12 @@
  */
 
 import "./anthropic";
+import "./deepseek";
 import "./gemini";
 import "./grok";
+import "./groq";
+import "./mistral";
 import "./ollama";
 import "./openai";
+import "./openrouter";
 import "./perplexity";
