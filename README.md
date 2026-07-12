@@ -58,10 +58,10 @@ npm install @google/genai     # Gemini
 
 ## Entry points
 
-| Subpath                                                | Contents                                                                                                                                                                                                         |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Subpath                                               | Contents                                                                                                                                                                                                         |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@pranavraut033/llm-core`                             | Types, `ProviderId`/`BUILTIN_PROVIDERS`, `LLMCoreConfig`, logger, token-usage types/utilities, `ProviderRegistry`/`getRegistry`, `getProviderInstance`, `LLMProvider` base class. **No provider SDKs required.** |
-| `@pranavraut033/llm-core/providers/register-builtins` | Side-effect import that registers all 10 built-in providers (OpenAI, Gemini, Grok, Groq, Perplexity, Ollama, Anthropic, DeepSeek, Mistral, OpenRouter). Requires the relevant SDKs to be installed.               |
+| `@pranavraut033/llm-core/providers/register-builtins` | Side-effect import that registers all 10 built-in providers (OpenAI, Gemini, Grok, Groq, Perplexity, Ollama, Anthropic, DeepSeek, Mistral, OpenRouter). Requires the relevant SDKs to be installed.              |
 | `@pranavraut033/llm-core/providers/openai-compatible` | `OpenAICompatibleProvider` base class for building custom OpenAI-compatible providers. Requires `openai`.                                                                                                        |
 | `@pranavraut033/llm-core/prompts`                     | Generic Handlebars prompt-template registry/resolver/validator.                                                                                                                                                  |
 

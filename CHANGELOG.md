@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [0.1.0] - 2026-07-12
 
 ### Added
+
 - Multi-provider LLM abstraction with a provider registry/factory and a typed, module-augmentable `ProviderId` ([6c02c04])
 - Generic prompt-template registry with Handlebars resolution and Zod validation
 - Injectable token-usage tracker
@@ -15,10 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - DeepSeek, Groq, Mistral, and OpenRouter providers via a generic OpenAI-compatible provider base ([65bbe99])
 
 ### Fixed
+
 - Template validation now uses `Handlebars.parse()` instead of a custom check ([616ebc4])
 - Corrected package library name ([3a52a00])
 
 ### Internal
+
 - Typed `ProviderId` refactor and matching test updates ([6c02c04], [2887ce3])
 - Comprehensive test coverage for providers, logger, and prompts ([ef00b68])
 - Documentation updates for typed `ProviderId` and custom provider registration ([75ce62f])
