@@ -1,13 +1,12 @@
+import { ProviderRuntimeConfig } from "../config";
 import { createConsoleLogger } from "../logger";
 import { BUILTIN_PROVIDERS, ProviderId } from "../providerType";
 import { LLMProvider } from "./LLMProvider";
 import { OpenAICompatibleProvider } from "./openaiCompatibleProvider";
 
-const logger = createConsoleLogger("OpenAI");
-
 export class OpenAIProvider extends OpenAICompatibleProvider {
-  constructor(apiKey: string) {
-    super({ apiKey });
+  constructor(apiKey: string, runtimeConfig?: ProviderRuntimeConfig) {
+    super({ apiKey }, runtimeConfig, createConsoleLogger("OpenAI"));
   }
 
   get providerType(): ProviderId {
@@ -25,7 +24,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
 
   async fetchModels(): Promise<string[]> {
     try {
-      logger.debug("Fetching models from OpenAI API");
+      this.logger.debug("Fetching models from OpenAI API");
       const response = await this.client.models.list();
 
       return response.data
@@ -39,7 +38,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
             !id.includes("image")
         );
     } catch (error) {
-      logger.error("Error fetching models", { error });
+      this.logger.error("Error fetching models", { error });
       return ["gpt-4o", "gpt-3.5-turbo"]; // fallback
     }
   }
@@ -60,10 +59,10 @@ LLMProvider.register(
     description:
       "Created ChatGPT and the GPT series, widely seen as the company that kicked off the modern AI boom. Offers the GPT-4o and o-series reasoning models for consumers and via API.",
   },
-  (apiKey?: string) => {
+  (apiKey?: string, runtimeConfig?: ProviderRuntimeConfig) => {
     if (!apiKey) {
       throw new Error("OpenAI API key is required");
     }
-    return new OpenAIProvider(apiKey);
+    return new OpenAIProvider(apiKey, runtimeConfig);
   }
 );

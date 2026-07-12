@@ -106,6 +106,24 @@ describe("resolveTemplate", () => {
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
+
+  it("does not HTML-escape interpolated context (noEscape)", () => {
+    const plainTemplate: PromptTemplate<FieldContext, "edit_field"> = {
+      id: "field.plain",
+      purpose: "edit_field",
+      requiredContext: ["value"],
+      systemPrompt: "sys",
+      userPrompt: "Company: {{value}}",
+    };
+
+    const resolved = resolveTemplate(plainTemplate, {
+      value: `AT&T <Corp> "quoted" 'it's'`,
+    });
+
+    expect(resolved.userPrompt).toBe(`Company: AT&T <Corp> "quoted" 'it's'`);
+    expect(resolved.userPrompt).not.toContain("&amp;");
+    expect(resolved.userPrompt).not.toContain("&lt;");
+  });
 });
 
 describe("validateTemplate", () => {

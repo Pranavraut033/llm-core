@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import "./helpers/ambientProviderIds";
 import { DummyProvider, DUMMY_RESULT_TEXT } from "./helpers/dummyProvider";
 import { ResolvedPrompt } from "../src/prompts/types";
+import { LLMUsageInfo } from "../src/tokens/usageTypes";
 import { PromptMessage } from "../src/types";
 
 class TestableProvider extends DummyProvider {
@@ -161,6 +162,63 @@ describe("LLMProvider.toPromptMessages", () => {
     expect(provider().callToPromptMessages(resolved)).toEqual([
       { role: "user", content: "usr" },
     ]);
+  });
+});
+
+describe("LLMProvider runtime config wiring", () => {
+  const usage: LLMUsageInfo = {
+    promptTokens: 1,
+    completionTokens: 1,
+    totalTokens: 2,
+    provider: "integration-dummy" as never,
+    model: "dummy-model",
+    purpose: "generate_text",
+  };
+
+  it("falls back to the injected onUsage sink when no explicit sink is passed", () => {
+    const events: LLMUsageInfo[] = [];
+    const p = new DummyProvider("integration-dummy" as never, undefined, {
+      onUsage: (u) => {
+        events.push(u);
+      },
+    });
+
+    p.callNotifyUsage(usage);
+    expect(events).toEqual([usage]);
+  });
+
+  it("prefers an explicit sink over the injected default", () => {
+    const injected: LLMUsageInfo[] = [];
+    const explicit: LLMUsageInfo[] = [];
+    const p = new DummyProvider("integration-dummy" as never, undefined, {
+      onUsage: (u) => {
+        injected.push(u);
+      },
+    });
+
+    p.callNotifyUsage(usage, (u) => explicit.push(u));
+    expect(explicit).toEqual([usage]);
+    expect(injected).toEqual([]);
+  });
+
+  it("does nothing when neither an explicit nor injected sink is configured", () => {
+    const p = new DummyProvider("integration-dummy" as never);
+    expect(() => p.callNotifyUsage(usage)).not.toThrow();
+  });
+
+  it("uses the injected logger instead of the default noop logger", () => {
+    const messages: string[] = [];
+    const p = new DummyProvider("integration-dummy" as never, undefined, {
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: (msg) => messages.push(msg as string),
+      },
+    });
+
+    p.getLogger().error("boom");
+    expect(messages).toEqual(["boom"]);
   });
 });
 

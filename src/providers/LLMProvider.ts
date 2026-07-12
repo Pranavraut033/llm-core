@@ -8,10 +8,19 @@
  */
 import z, { ZodTypeAny } from "zod";
 
+import { ProviderRuntimeConfig } from "../config";
+import { AbortError, classifyProviderError, RateLimitError } from "../errors";
+import { Logger, noopLogger } from "../logger";
 import { ResolvedPrompt } from "../prompts/types";
 import { ProviderId } from "../providerType";
 import { LLMUsageInfo } from "../tokens/usageTypes";
-import { LLMGenerationOptions, LLMResult, PromptMessage } from "../types";
+import {
+  contentToText,
+  LLMGenerationOptions,
+  LLMResult,
+  LLMStreamEvent,
+  PromptMessage,
+} from "../types";
 import { ProviderRegistry, ProviderMetadata } from "./registry";
 
 export type StructureResult<TSchema extends ZodTypeAny> = {
@@ -20,6 +29,123 @@ export type StructureResult<TSchema extends ZodTypeAny> = {
 };
 
 export abstract class LLMProvider {
+  /** Injected via `LLMCoreConfig.logger`; falls back to the subclass's own tagged console logger. */
+  protected logger: Logger;
+  /** Injected via `LLMCoreConfig.onUsage`; fires as a default when a call site doesn't pass its own `onUsage`. */
+  private onUsageSink?: (usage: LLMUsageInfo) => void | Promise<void>;
+
+  constructor(runtimeConfig?: ProviderRuntimeConfig, fallbackLogger?: Logger) {
+    this.logger = runtimeConfig?.logger ?? fallbackLogger ?? noopLogger;
+    this.onUsageSink = runtimeConfig?.onUsage;
+  }
+
+  /**
+   * Report usage to whichever sink applies: the per-call `onUsage` (from
+   * `LLMGenerationOptions`) if given, otherwise the config-level default.
+   */
+  protected notifyUsage(
+    usage: LLMUsageInfo,
+    explicitSink?: (usage: LLMUsageInfo) => void
+  ): void {
+    (explicitSink ?? this.onUsageSink)?.(usage);
+  }
+
+  /**
+   * Base delay (ms) for `withResilience`'s exponential backoff (attempt 0
+   * waits this long, attempt 1 waits 2x, etc.), unless a `RateLimitError`
+   * carries its own `retryAfterMs`. A protected instance field (rather than
+   * a hardcoded constant) so tests can override it to keep retry tests fast.
+   */
+  protected resilienceBackoffBaseMs = 500;
+
+  /**
+   * Wrap an SDK call with cancellation (`AbortSignal`), a timeout, and
+   * retry-with-backoff for retryable failures (rate limits, 5xx). `fn`
+   * receives the composed signal to forward into the underlying SDK/fetch
+   * call so cancellation actually reaches the network request.
+   *
+   * - If the caller's `signal` is already aborted, rejects with
+   *   `AbortError` immediately, without invoking `fn`.
+   * - On throw, the error is classified via `classifyProviderError`. If the
+   *   composed signal is what caused the failure, it's classified as
+   *   `TimeoutError` (when `timeoutMs` elapsed) or `AbortError` (user
+   *   cancellation) regardless of how the SDK itself represents that
+   *   failure — some SDKs don't distinguish the two in their own error
+   *   shape.
+   * - Otherwise, retries (exponential backoff, honoring
+   *   `RateLimitError.retryAfterMs` when present) while the classified
+   *   error is `retryable` and attempts remain (`maxRetries`, default 2).
+   *   Never retries `AbortError`/`TimeoutError`/`AuthError`/
+   *   `ContextLengthError` — `retryable` is already `false` for those.
+   */
+  protected async withResilience<T>(
+    fn: (signal: AbortSignal) => Promise<T>,
+    options: {
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      maxRetries?: number;
+      provider?: ProviderId;
+    }
+  ): Promise<T> {
+    const { signal: callerSignal, timeoutMs, maxRetries = 2 } = options;
+    const provider = options.provider ?? this.providerType;
+
+    if (callerSignal?.aborted) {
+      throw new AbortError("The operation was aborted.", { provider });
+    }
+
+    const signals: AbortSignal[] = [];
+    if (callerSignal) signals.push(callerSignal);
+    if (timeoutMs !== undefined) signals.push(AbortSignal.timeout(timeoutMs));
+
+    const composedSignal: AbortSignal | undefined =
+      signals.length === 0
+        ? undefined
+        : signals.length === 1
+          ? signals[0]
+          : AbortSignal.any(signals);
+
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await fn(composedSignal ?? new AbortController().signal);
+      } catch (err) {
+        if (composedSignal?.aborted) {
+          const reason = composedSignal.reason as { name?: string } | undefined;
+          if (reason?.name === "TimeoutError") {
+            throw classifyProviderError(
+              Object.assign(new Error("The operation timed out."), {
+                name: "TimeoutError",
+              }),
+              provider
+            );
+          }
+          throw classifyProviderError(
+            Object.assign(new Error("The operation was aborted."), {
+              name: "AbortError",
+            }),
+            provider
+          );
+        }
+
+        const classified = classifyProviderError(err, provider);
+
+        if (!classified.retryable || attempt >= maxRetries) {
+          throw classified;
+        }
+
+        const backoffMs =
+          classified instanceof RateLimitError &&
+          classified.retryAfterMs !== undefined
+            ? classified.retryAfterMs
+            : this.resilienceBackoffBaseMs * 2 ** attempt;
+
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        attempt++;
+      }
+    }
+  }
+
   abstract get providerType(): ProviderId;
   abstract get streamSupported(): boolean;
 
@@ -29,7 +155,7 @@ export abstract class LLMProvider {
   abstract runLLM(
     messages: PromptMessage[],
     options: LLMGenerationOptions & { stream: true }
-  ): AsyncGenerator<string>;
+  ): AsyncGenerator<LLMStreamEvent>;
 
   abstract runLLM(
     messages: PromptMessage[],
@@ -39,7 +165,7 @@ export abstract class LLMProvider {
   abstract runLLM(
     messages: PromptMessage[],
     options: LLMGenerationOptions
-  ): Promise<LLMResult<string>> | AsyncGenerator<string>;
+  ): Promise<LLMResult<string>> | AsyncGenerator<LLMStreamEvent>;
 
   abstract runStructuredLLM<TSchema extends ZodTypeAny>(
     template: ResolvedPrompt,
@@ -109,7 +235,7 @@ export abstract class LLMProvider {
     systemPrompt: string,
     userPrompt: string,
     options: LLMGenerationOptions & { stream: true }
-  ): AsyncGenerator<string>;
+  ): AsyncGenerator<LLMStreamEvent>;
 
   generateText(
     systemPrompt: string,
@@ -125,7 +251,7 @@ export abstract class LLMProvider {
     systemPrompt: string,
     userPrompt: string,
     options: LLMGenerationOptions
-  ): Promise<LLMResult<string>> | AsyncGenerator<string> {
+  ): Promise<LLMResult<string>> | AsyncGenerator<LLMStreamEvent> {
     // Default implementation using runPrompt - providers can override
     return this.runLLM(
       [
@@ -179,7 +305,10 @@ export abstract class LLMProvider {
   static register(
     type: ProviderId,
     metadata: Omit<ProviderMetadata, "type">,
-    constructor: (apiKey?: string) => LLMProvider
+    constructor: (
+      apiKey?: string,
+      runtimeConfig?: ProviderRuntimeConfig
+    ) => LLMProvider
   ): void {
     ProviderRegistry.getInstance().register(type, metadata, constructor);
   }
@@ -210,7 +339,8 @@ export abstract class LLMProvider {
     const withMessages = resolved as ResolvedPrompt & {
       messages?: PromptMessage[];
     };
-    const messageContent = withMessages.messages?.map((m) => m.content) ?? [];
+    const messageContent =
+      withMessages.messages?.map((m) => contentToText(m.content)) ?? [];
 
     return [
       resolved.systemPrompt ?? "",

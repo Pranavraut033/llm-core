@@ -3,6 +3,8 @@
  * Validates LLM responses against a resolved template's output schema.
  */
 
+import { ZodError } from "zod";
+
 import { ResolvedPrompt } from "./types";
 
 /**
@@ -57,15 +59,12 @@ export async function validateTemplateResponse<T = unknown>(
     };
   } catch (error: unknown) {
     // Handle Zod validation errors
-    const zodError = error as Record<string, unknown> | undefined;
-    if (zodError?.name === "ZodError" && Array.isArray(zodError.errors)) {
-      const zodErrors = zodError.errors as Array<Record<string, unknown>>;
-      zodErrors.forEach((err) => {
+    if (error instanceof ZodError) {
+      error.issues.forEach((issue) => {
         errors.push({
-          path:
-            (Array.isArray(err.path) ? err.path.join(".") : "root") || "root",
-          message: (err.message as string) || "Unknown error",
-          code: (err.code as string) || "unknown",
+          path: issue.path.length ? issue.path.join(".") : "root",
+          message: issue.message || "Unknown error",
+          code: issue.code || "unknown",
         });
       });
     } else if (error instanceof Error) {

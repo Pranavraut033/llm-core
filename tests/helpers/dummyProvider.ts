@@ -5,6 +5,8 @@
  */
 import { z, ZodTypeAny } from "zod";
 
+import { ProviderRuntimeConfig } from "../../src/config";
+import { Logger } from "../../src/logger";
 import { ResolvedPrompt } from "../../src/prompts/types";
 import { LLMProvider, StructureResult } from "../../src/providers/LLMProvider";
 import { ProviderId } from "../../src/providerType";
@@ -12,6 +14,7 @@ import { LLMUsageInfo } from "../../src/tokens/usageTypes";
 import {
   LLMGenerationOptions,
   LLMResult,
+  LLMStreamEvent,
   PromptMessage,
 } from "../../src/types";
 
@@ -20,9 +23,22 @@ export const DUMMY_RESULT_TEXT = "dummy response";
 export class DummyProvider extends LLMProvider {
   constructor(
     private readonly id: ProviderId,
-    private readonly apiKey?: string
+    private readonly apiKey?: string,
+    runtimeConfig?: ProviderRuntimeConfig
   ) {
-    super();
+    super(runtimeConfig);
+  }
+
+  /** Test-only escape hatches for the protected base-class plumbing. */
+  public callNotifyUsage(
+    usage: LLMUsageInfo,
+    explicitSink?: (usage: LLMUsageInfo) => void
+  ): void {
+    this.notifyUsage(usage, explicitSink);
+  }
+
+  public getLogger(): Logger {
+    return this.logger;
   }
 
   get providerType(): ProviderId {
@@ -48,7 +64,7 @@ export class DummyProvider extends LLMProvider {
   runLLM(
     messages: PromptMessage[],
     options: LLMGenerationOptions & { stream: true }
-  ): AsyncGenerator<string>;
+  ): AsyncGenerator<LLMStreamEvent>;
   runLLM(
     messages: PromptMessage[],
     options: LLMGenerationOptions & { stream?: false; onUsage?: never }
@@ -56,7 +72,7 @@ export class DummyProvider extends LLMProvider {
   runLLM(
     messages: PromptMessage[],
     options: LLMGenerationOptions
-  ): Promise<LLMResult<string>> | AsyncGenerator<string> {
+  ): Promise<LLMResult<string>> | AsyncGenerator<LLMStreamEvent> {
     const usage = this.estimateTokenUsage({
       inputPrompt: this.combinePromptText({
         systemPrompt: "",

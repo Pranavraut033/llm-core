@@ -1,15 +1,18 @@
+import { ProviderRuntimeConfig } from "../config";
 import { createConsoleLogger } from "../logger";
 import { BUILTIN_PROVIDERS } from "../providerType";
 import { LLMProvider } from "./LLMProvider";
 import { OpenAICompatibleProvider } from "./openaiCompatibleProvider";
 
-const logger = createConsoleLogger("Grok");
-
 export class GrokProvider extends OpenAICompatibleProvider {
   public readonly providerType = BUILTIN_PROVIDERS.GROK;
 
-  constructor(apiKey: string) {
-    super({ apiKey, baseURL: "https://api.x.ai/v1" });
+  constructor(apiKey: string, runtimeConfig?: ProviderRuntimeConfig) {
+    super(
+      { apiKey, baseURL: "https://api.x.ai/v1" },
+      runtimeConfig,
+      createConsoleLogger("Grok")
+    );
   }
 
   private textGenModelRegex =
@@ -24,7 +27,7 @@ export class GrokProvider extends OpenAICompatibleProvider {
 
       return models;
     } catch (error) {
-      logger.error("Error fetching models", { error });
+      this.logger.error("Error fetching models", { error });
       return ["grok-4-1-fast-reasoning", "grok-3-mini"]; // fallback
     }
   }
@@ -44,10 +47,10 @@ LLMProvider.register(
     description:
       "Elon Musk's AI lab xAI built Grok with real-time access to X (Twitter) data and a less filtered, more irreverent personality. Grok 3 competes directly with frontier models on coding and reasoning.",
   },
-  (apiKey?: string) => {
+  (apiKey?: string, runtimeConfig?: ProviderRuntimeConfig) => {
     if (!apiKey) {
       throw new Error("Grok API key is required");
     }
-    return new GrokProvider(apiKey);
+    return new GrokProvider(apiKey, runtimeConfig);
   }
 );

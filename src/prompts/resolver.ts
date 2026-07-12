@@ -128,9 +128,15 @@ export function resolveTemplate<
     ...options,
   };
 
-  // Compile and execute Handlebars templates
-  const systemTemplate = Handlebars.compile(template.systemPrompt);
-  const userTemplate = Handlebars.compile(template.userPrompt);
+  // Compile and execute Handlebars templates.
+  // noEscape: true — these are LLM prompts, not HTML; escaping "AT&T" to
+  // "AT&amp;T" would corrupt interpolated content.
+  const systemTemplate = Handlebars.compile(template.systemPrompt, {
+    noEscape: true,
+  });
+  const userTemplate = Handlebars.compile(template.userPrompt, {
+    noEscape: true,
+  });
 
   const systemPrompt = systemTemplate(fullContext);
   let userPrompt = userTemplate(fullContext);

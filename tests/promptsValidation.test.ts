@@ -6,6 +6,7 @@ import { PromptTemplate } from "../src/prompts/types";
 import {
   getValidationSummary,
   validateOrThrow,
+  validateTemplateResponse,
   ValidationResult,
 } from "../src/prompts/validation";
 
@@ -39,6 +40,27 @@ describe("validateOrThrow", () => {
     await expect(
       validateOrThrow({ title: 123 }, resolved, "cat blog post")
     ).rejects.toThrow(/Template validation failed for cat blog post/);
+  });
+});
+
+describe("validateTemplateResponse (Zod issue extraction)", () => {
+  it("extracts a per-field path/message/code for each Zod issue, not one generic error", async () => {
+    const multiFieldTemplate: PromptTemplate<Ctx, "generate"> = {
+      ...template,
+      outputSchema: z.object({ title: z.string(), count: z.number() }),
+    };
+    const resolved = resolveTemplate(multiFieldTemplate, { topic: "cats" });
+
+    const result = await validateTemplateResponse(
+      { title: 123, count: "nope" },
+      resolved
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toHaveLength(2);
+    expect(result.errors.map((e) => e.path).sort()).toEqual(["count", "title"]);
+    expect(result.errors.every((e) => e.code === "invalid_type")).toBe(true);
+    expect(result.errors.every((e) => e.message.length > 0)).toBe(true);
   });
 });
 

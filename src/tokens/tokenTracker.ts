@@ -10,6 +10,7 @@
 import { v4 as uuidv4 } from "uuid";
 
 import { Logger, noopLogger } from "../logger";
+import { computeCostUSD } from "./pricing";
 import { LLMUsageInfo, MultiPurpose } from "./usageTypes";
 
 /**
@@ -52,7 +53,7 @@ export function mergeLLMUsageInfo(
     }
   }
 
-  return {
+  const merged: LLMUsageInfo = {
     provider: usage1.provider,
     model: usage1.model,
     purpose: [
@@ -71,10 +72,6 @@ export function mergeLLMUsageInfo(
       (sum, u) => sum + (u.totalTokens || 0),
       usage1.totalTokens || 0
     ),
-    costUSD: additionalUsageInfo.reduce(
-      (sum, u) => sum + (u.costUSD || 0),
-      usage1.costUSD || 0
-    ),
     cacheReadTokens: additionalUsageInfo.reduce(
       (sum, u) => sum + (u.cacheReadTokens || 0),
       usage1.cacheReadTokens || 0
@@ -92,6 +89,25 @@ export function mergeLLMUsageInfo(
       usage1.durationMs || 0
     ),
   };
+
+  // Prefer each input record's own `costUSD` (in case a host/provider
+  // already computed and attached one), falling back to computing it from
+  // that record's own token counts when missing. Summed rather than
+  // recomputed from merged totals so a pre-populated cost survives even
+  // for models this package's pricing table doesn't know about. If none of
+  // the inputs have a computable cost, leave `costUSD` `undefined` instead
+  // of silently defaulting to 0.
+  const perRecordCosts = [usage1, ...additionalUsageInfo].map(
+    (u) => u.costUSD ?? computeCostUSD(u)
+  );
+  if (perRecordCosts.some((c) => c !== undefined)) {
+    merged.costUSD = perRecordCosts.reduce(
+      (sum: number, c) => sum + (c ?? 0),
+      0
+    );
+  }
+
+  return merged;
 }
 
 /**
@@ -122,6 +138,7 @@ export async function trackTokenUsage(
   const usage: LLMUsageInfo = {
     ...data,
     requestId: data.requestId || generateRequestId(purposeLabel),
+    costUSD: data.costUSD ?? computeCostUSD(data),
   };
 
   if (options?.sink) {

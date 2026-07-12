@@ -42,24 +42,30 @@ export async function getProviderInstance(
     throw new Error(`No metadata found for provider ${type}`);
   }
 
-  // Retrieve API key if provider requires auth
+  // Resolve credential/config for every provider — required for
+  // requiresAuth providers, optional (e.g. a custom base URL) for others
+  // like Ollama.
   let apiKey: string | undefined;
-  if (metadata.requiresAuth) {
-    try {
-      const key = await config.keyResolver(type);
-      apiKey = key || undefined;
-      if (!apiKey) {
-        throw new Error(
-          `No API key configured for ${metadata.name}. Please set it in settings.`
-        );
-      }
-    } catch (error) {
+  try {
+    const key = await config.keyResolver(type);
+    apiKey = key || undefined;
+  } catch (error) {
+    if (metadata.requiresAuth) {
       throw new Error(
         `Failed to retrieve API key for ${metadata.name}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
 
+  if (metadata.requiresAuth && !apiKey) {
+    throw new Error(
+      `No API key configured for ${metadata.name}. Please set it in settings.`
+    );
+  }
+
   // Create and return provider instance
-  return registry.getInstance(type, apiKey);
+  return registry.getInstance(type, apiKey, {
+    logger: config.logger,
+    onUsage: config.onUsage,
+  });
 }

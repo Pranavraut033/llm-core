@@ -4,6 +4,7 @@
  * Providers register themselves via static registration calls
  */
 
+import { ProviderRuntimeConfig } from "../config";
 import { ProviderId } from "../providerType";
 import { LLMProvider } from "./LLMProvider";
 
@@ -16,7 +17,10 @@ export interface ProviderMetadata {
   defaultModels?: string[];
 }
 
-type ProviderConstructor = (apiKey?: string) => LLMProvider;
+type ProviderConstructor = (
+  apiKey?: string,
+  runtimeConfig?: ProviderRuntimeConfig
+) => LLMProvider;
 
 interface RegisteredProvider {
   metadata: ProviderMetadata;
@@ -66,14 +70,18 @@ export class ProviderRegistry {
   /**
    * Get a provider instance by type
    */
-  getInstance(type: ProviderId, apiKey?: string): LLMProvider {
+  getInstance(
+    type: ProviderId,
+    apiKey?: string,
+    runtimeConfig?: ProviderRuntimeConfig
+  ): LLMProvider {
     const registered = this.providers.get(type);
     if (!registered) {
       throw new Error(
         `Provider ${type} is not registered. Available providers: ${this.getAvailableTypes().join(", ")}`
       );
     }
-    return registered.constructor(apiKey);
+    return registered.constructor(apiKey, runtimeConfig);
   }
 
   /**

@@ -1,27 +1,51 @@
 import {
+  Content,
+  FunctionCallingConfigMode,
+  FunctionDeclaration,
   GenerateContentResponse,
   GenerateContentResponseUsageMetadata,
   GoogleGenAI,
+  Part,
   Schema,
   Type as SchemaType,
 } from "@google/genai";
 import z, { ZodTypeAny } from "zod";
 
+import { ProviderRuntimeConfig } from "../config";
+import { classifyProviderError } from "../errors";
 import { createConsoleLogger } from "../logger";
 import { ResolvedPrompt } from "../prompts/types";
 import { BUILTIN_PROVIDERS, ProviderId } from "../providerType";
 import { LLMUsageInfo } from "../tokens/usageTypes";
-import { LLMGenerationOptions, LLMResult, PromptMessage } from "../types";
+import {
+  ContentPart,
+  contentToText,
+  LLMGenerationOptions,
+  LLMResult,
+  LLMStreamEvent,
+  PromptMessage,
+  ToolCall,
+  ToolDefinition,
+} from "../types";
 import { LLMProvider, StructureResult } from "./LLMProvider";
 
-const logger = createConsoleLogger("Gemini");
+/**
+ * The pinned `@google/genai` SDK version's `ThinkingConfig` type only
+ * declares `includeThoughts` — `thinkingBudget` is a real, documented
+ * Gemini API field that newer SDK versions type but this one doesn't.
+ * Extend locally rather than casting to `any`.
+ */
+type GeminiThinkingConfig = {
+  includeThoughts?: boolean;
+  thinkingBudget?: number;
+};
 
 export class GeminiProvider extends LLMProvider {
   private client: GoogleGenAI;
   private apiKey: string;
 
-  constructor(apiKey: string) {
-    super();
+  constructor(apiKey: string, runtimeConfig?: ProviderRuntimeConfig) {
+    super(runtimeConfig, createConsoleLogger("Gemini"));
     this.apiKey = apiKey;
     this.client = new GoogleGenAI({ apiKey });
   }
@@ -34,13 +58,42 @@ export class GeminiProvider extends LLMProvider {
   }
 
   get streamSupported(): boolean {
-    return false; // Gemini's streaming API is not stable, so we disable it for now
+    return true;
+  }
+
+  /**
+   * `@google/genai` 0.3.1's request config has no `abortSignal` (only a
+   * `httpOptions.timeout`) — verified against the pinned SDK's `.d.ts`.
+   * Races the SDK promise against the signal instead so cancellation still
+   * works from the caller's side, without an SDK-native abort.
+   */
+  private raceWithSignal<T>(
+    promise: Promise<T>,
+    signal: AbortSignal
+  ): Promise<T> {
+    if (signal.aborted) {
+      return Promise.reject(signal.reason ?? new Error("Aborted"));
+    }
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(signal.reason ?? new Error("Aborted"));
+      signal.addEventListener("abort", onAbort, { once: true });
+      promise.then(
+        (value) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(value);
+        },
+        (err: unknown) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(err);
+        }
+      );
+    });
   }
 
   runLLM(
     messages: PromptMessage[],
     options: LLMGenerationOptions & { stream: true }
-  ): AsyncGenerator<string>;
+  ): AsyncGenerator<LLMStreamEvent>;
 
   runLLM(
     messages: PromptMessage[],
@@ -50,20 +103,51 @@ export class GeminiProvider extends LLMProvider {
   runLLM(
     messages: PromptMessage[],
     options: LLMGenerationOptions
-  ): Promise<LLMResult<string>> | AsyncGenerator<string> {
-    // Gemini doesn't have separate system messages, combine them
-
+  ): Promise<LLMResult<string>> | AsyncGenerator<LLMStreamEvent> {
     if (options.stream) {
       return this.runStreamedLLM(messages, options);
     }
 
-    return this.client.models
-      .generateContent({
-        model: options.model,
-        contents: this.toGeminiMessages(messages),
-      })
+    const { contents, systemInstruction } = this.toGeminiRequest(messages);
+    const hasTools = Boolean(options.tools?.length);
+    const toolConfig = this.toGeminiToolConfig(options.toolChoice, hasTools);
+
+    return this.withResilience(
+      (signal) =>
+        this.raceWithSignal(
+          this.client.models.generateContent({
+            model: options.model,
+            contents,
+            config: {
+              temperature: options.temperature,
+              maxOutputTokens: options.maxTokens,
+              ...this.toGeminiSamplingConfig(options),
+              ...(systemInstruction ? { systemInstruction } : {}),
+              ...(hasTools
+                ? {
+                    tools: [
+                      {
+                        functionDeclarations: options.tools!.map((tool) =>
+                          this.toGeminiTool(tool)
+                        ),
+                      },
+                    ],
+                  }
+                : {}),
+              ...(toolConfig ? { toolConfig } : {}),
+            },
+          }),
+          signal
+        ),
+      {
+        signal: options.signal,
+        timeoutMs: options.timeoutMs,
+        maxRetries: options.maxRetries,
+      }
+    )
       .then((response) => {
         const content = response.text || "";
+        const toolCalls = this.extractToolCalls(response);
         const usage = response.usageMetadata
           ? this.normalizeUsage({
               usage: response.usageMetadata,
@@ -78,15 +162,187 @@ export class GeminiProvider extends LLMProvider {
               provider: this.providerType,
             });
 
-        return { result: content, usage };
+        this.notifyUsage(usage, options.onUsage);
+
+        return { result: content, toolCalls, usage };
       })
       .catch((err: unknown) => {
-        const error = err as Record<string, unknown>;
-        logger.error("runLLM failed", { error: err, message: error?.message });
-        throw new Error(
-          `Gemini runLLM failed: ${String(error?.message) || err}`
-        );
+        this.logger.error("runLLM failed", { error: err });
+        throw classifyProviderError(err, this.providerType);
       });
+  }
+
+  /**
+   * Sampling/reasoning passthrough params supported by Gemini's
+   * `GenerateContentConfig`. No penalties/seed/reasoning_effort on Gemini.
+   */
+  private toGeminiSamplingConfig(options: LLMGenerationOptions): {
+    topP?: number;
+    topK?: number;
+    stopSequences?: string[];
+    thinkingConfig?: GeminiThinkingConfig;
+  } {
+    return {
+      ...(options.topP !== undefined ? { topP: options.topP } : {}),
+      ...(options.topK !== undefined ? { topK: options.topK } : {}),
+      ...(options.stopSequences?.length
+        ? { stopSequences: options.stopSequences }
+        : {}),
+      ...(options.thinkingBudget !== undefined
+        ? { thinkingConfig: { thinkingBudget: options.thinkingBudget } }
+        : {}),
+    };
+  }
+
+  private toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
+    return {
+      name: tool.name,
+      description: tool.description,
+      parameters: this.convertJsonSchemaToGemini(tool.parameters),
+    };
+  }
+
+  private toGeminiToolConfig(
+    toolChoice: LLMGenerationOptions["toolChoice"],
+    hasTools: boolean
+  ):
+    | {
+        functionCallingConfig: {
+          mode: FunctionCallingConfigMode;
+          allowedFunctionNames?: string[];
+        };
+      }
+    | undefined {
+    if (!toolChoice || !hasTools) return undefined;
+    if (toolChoice === "auto")
+      return {
+        functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
+      };
+    if (toolChoice === "none")
+      return {
+        functionCallingConfig: { mode: FunctionCallingConfigMode.NONE },
+      };
+    if (toolChoice === "required")
+      return { functionCallingConfig: { mode: FunctionCallingConfigMode.ANY } };
+    return {
+      functionCallingConfig: {
+        mode: FunctionCallingConfigMode.ANY,
+        allowedFunctionNames: [toolChoice.name],
+      },
+    };
+  }
+
+  private extractToolCalls(
+    response: GenerateContentResponse
+  ): ToolCall[] | undefined {
+    const calls = response.functionCalls;
+    if (!calls?.length) return undefined;
+    return calls.map((call, index) => ({
+      id: call.id ?? `${call.name ?? "call"}_${index}`,
+      name: call.name ?? "",
+      arguments: call.args ?? {},
+    }));
+  }
+
+  /**
+   * Converts flattened PromptMessages into Gemini's multi-turn Content[]
+   * shape, translating assistant toolCalls into functionCall parts and
+   * tool-result messages into functionResponse parts so tool-call loops
+   * survive a round trip through this provider.
+   */
+  private toGeminiRequest(messages: PromptMessage[]): {
+    contents: Content[];
+    systemInstruction?: string;
+  } {
+    const systemInstruction = messages
+      .filter((message) => message.role === "system")
+      .map((message) => message.content)
+      .join("\n\n")
+      .trim();
+
+    const contents: Content[] = [];
+
+    for (const message of messages) {
+      if (message.role === "system") continue;
+
+      if (message.role === "tool") {
+        const part: Part = {
+          functionResponse: {
+            name: message.toolName ?? message.toolCallId,
+            response: { output: message.content },
+          },
+        };
+        const last = contents[contents.length - 1];
+        if (last?.role === "user" && last.parts) {
+          last.parts.push(part);
+        } else {
+          contents.push({ role: "user", parts: [part] });
+        }
+        continue;
+      }
+
+      if (message.role === "assistant" && message.toolCalls?.length) {
+        const parts: Part[] = [];
+        if (typeof message.content === "string") {
+          if (message.content) parts.push({ text: message.content });
+        } else {
+          parts.push(...this.toGeminiParts(message.content));
+        }
+        for (const toolCall of message.toolCalls) {
+          parts.push({
+            functionCall: {
+              name: toolCall.name,
+              args: (toolCall.arguments ?? {}) as Record<string, unknown>,
+            },
+          });
+        }
+        contents.push({ role: "model", parts });
+        continue;
+      }
+
+      contents.push({
+        role: message.role === "assistant" ? "model" : "user",
+        parts:
+          typeof message.content === "string"
+            ? [{ text: message.content }]
+            : this.toGeminiParts(message.content),
+      });
+    }
+
+    return { contents, systemInstruction: systemInstruction || undefined };
+  }
+
+  /**
+   * Maps a multimodal `content` array to Gemini `Part[]`. Base64 image/
+   * document parts map to `inlineData`; URL parts map to `fileData` (Gemini
+   * has no `mimeType`-less variant, but the SDK's `FileData.mimeType` is
+   * optional so a URL part with no known media type is still valid).
+   */
+  private toGeminiParts(content: ContentPart[]): Part[] {
+    return content.map((part) => this.toGeminiPart(part));
+  }
+
+  private toGeminiPart(part: ContentPart): Part {
+    if (part.type === "text") return { text: part.text };
+    if (part.type === "image") {
+      return "url" in part.image
+        ? { fileData: { fileUri: part.image.url } }
+        : {
+            inlineData: {
+              mimeType: part.image.mediaType,
+              data: part.image.data,
+            },
+          };
+    }
+    // part.type === "document"
+    return "url" in part.document
+      ? { fileData: { fileUri: part.document.url } }
+      : {
+          inlineData: {
+            mimeType: part.document.mediaType,
+            data: part.document.data,
+          },
+        };
   }
 
   toGeminiSchema(zodSchema: ZodTypeAny): Schema {
@@ -94,16 +350,83 @@ export class GeminiProvider extends LLMProvider {
     return this.convertJsonSchemaToGemini(jsonSchema);
   }
 
-  private convertJsonSchemaToGemini(schema: Record<string, unknown>): Schema {
-    // Handle $ref, allOf, anyOf, oneOf — not supported by Gemini, flatten if possible
+  /**
+   * Resolves a local JSON-Schema `$ref` (`#/$defs/Name` or
+   * `#/definitions/Name`, the two shapes Zod's `z.toJSONSchema` and most
+   * hand-written schemas use) against the accumulated defs map. Returns
+   * `undefined` on any unresolvable ref so the caller can fall back to the
+   * STRING default instead of crashing.
+   */
+  private resolveJsonSchemaRef(
+    ref: string,
+    defs: Record<string, unknown>
+  ): Record<string, unknown> | undefined {
+    const match = /^#\/(?:\$defs|definitions)\/(.+)$/.exec(ref);
+    if (!match) return undefined;
+    const def = defs[match[1]];
+    return def && typeof def === "object"
+      ? (def as Record<string, unknown>)
+      : undefined;
+  }
+
+  private convertJsonSchemaToGemini(
+    schema: Record<string, unknown>,
+    defs: Record<string, unknown> = {}
+  ): Schema {
+    // Thread any $defs/definitions declared on this node into the map so
+    // nested $ref's (including ones declared alongside the root schema)
+    // resolve correctly regardless of recursion depth.
+    const localDefs =
+      schema.$defs && typeof schema.$defs === "object"
+        ? (schema.$defs as Record<string, unknown>)
+        : schema.definitions && typeof schema.definitions === "object"
+          ? (schema.definitions as Record<string, unknown>)
+          : undefined;
+    const mergedDefs = localDefs ? { ...defs, ...localDefs } : defs;
+
+    if (typeof schema.$ref === "string") {
+      const resolved = this.resolveJsonSchemaRef(schema.$ref, mergedDefs);
+      if (resolved) {
+        return this.convertJsonSchemaToGemini(resolved, mergedDefs);
+      }
+      // Unresolvable ref — fall through to the default STRING fallback
+      // below rather than crashing.
+    }
+
+    // Handle allOf — not supported by Gemini, flatten if possible
     if (
       schema.allOf &&
       Array.isArray(schema.allOf) &&
       schema.allOf.length === 1
     ) {
       return this.convertJsonSchemaToGemini(
-        schema.allOf[0] as Record<string, unknown>
+        schema.allOf[0] as Record<string, unknown>,
+        mergedDefs
       );
+    }
+
+    // anyOf/oneOf: Gemini has no union type. The common nullable-union
+    // pattern (`anyOf: [T, {type:"null"}]`, which is what Zod's
+    // `.nullable()`/`.optional()` emit) collapses to `T` with `nullable:
+    // true`. A genuine multi-type union Gemini can't express is handled
+    // best-effort by converting the first non-null branch.
+    const union = (schema.anyOf ?? schema.oneOf) as
+      | Record<string, unknown>[]
+      | undefined;
+    if (Array.isArray(union) && union.length > 0) {
+      const isNullBranch = (branch: Record<string, unknown>) =>
+        branch.type === "null";
+      const hasNullBranch = union.some(isNullBranch);
+      const nonNullBranches = union.filter((branch) => !isNullBranch(branch));
+
+      if (nonNullBranches.length > 0) {
+        const converted = this.convertJsonSchemaToGemini(
+          nonNullBranches[0],
+          mergedDefs
+        );
+        if (hasNullBranch) converted.nullable = true;
+        return converted;
+      }
     }
 
     const geminiSchema: Schema = {};
@@ -118,7 +441,22 @@ export class GeminiProvider extends LLMProvider {
       return geminiSchema;
     }
 
-    switch (schema.type) {
+    // `type` as an array (e.g. `["string","null"]`) is the same nullable
+    // pattern as the anyOf/oneOf case above, just expressed differently.
+    const schemaType = schema.type;
+    if (Array.isArray(schemaType)) {
+      const types = schemaType as string[];
+      const nonNullTypes = types.filter((t) => t !== "null");
+      const isNullable = types.length !== nonNullTypes.length;
+      const converted = this.convertJsonSchemaToGemini(
+        { ...schema, type: nonNullTypes[0] },
+        mergedDefs
+      );
+      if (isNullable) converted.nullable = true;
+      return converted;
+    }
+
+    switch (schemaType) {
       case "string":
         geminiSchema.type = SchemaType.STRING;
         if (schema.enum) geminiSchema.enum = schema.enum as string[];
@@ -127,7 +465,7 @@ export class GeminiProvider extends LLMProvider {
       case "number":
       case "integer":
         geminiSchema.type =
-          schema.type === "integer" ? SchemaType.INTEGER : SchemaType.NUMBER;
+          schemaType === "integer" ? SchemaType.INTEGER : SchemaType.NUMBER;
         break;
 
       case "boolean":
@@ -138,7 +476,8 @@ export class GeminiProvider extends LLMProvider {
         geminiSchema.type = SchemaType.ARRAY;
         if (schema.items) {
           geminiSchema.items = this.convertJsonSchemaToGemini(
-            schema.items as Record<string, unknown>
+            schema.items as Record<string, unknown>,
+            mergedDefs
           );
         }
         break;
@@ -151,7 +490,8 @@ export class GeminiProvider extends LLMProvider {
               ([key, value]) => [
                 key,
                 this.convertJsonSchemaToGemini(
-                  value as Record<string, unknown>
+                  value as Record<string, unknown>,
+                  mergedDefs
                 ),
               ]
             )
@@ -172,7 +512,7 @@ export class GeminiProvider extends LLMProvider {
         break;
 
       default:
-        // Unknown or missing type (e.g. anyOf, oneOf, $ref not resolved) — fall back to string
+        // Unknown or missing type (e.g. an unresolved $ref) — fall back to string
         geminiSchema.type = SchemaType.STRING;
         break;
     }
@@ -192,6 +532,7 @@ export class GeminiProvider extends LLMProvider {
     return {
       promptTokens: usage.promptTokenCount ?? 0,
       completionTokens:
+        usage.candidatesTokenCount ??
         (usage.totalTokenCount ?? 0) - (usage.promptTokenCount ?? 0),
       totalTokens: usage.totalTokenCount ?? 0,
       provider: this.providerType,
@@ -201,19 +542,39 @@ export class GeminiProvider extends LLMProvider {
   }
 
   toGeminiMessages(messages: PromptMessage[]): string {
-    return messages.map((m) => `${m.role}: ${m.content}`).join("\n\n");
+    return messages
+      .map((m) => `${m.role}: ${contentToText(m.content)}`)
+      .join("\n\n");
   }
 
   private async *runStreamedLLM(
     messages: PromptMessage[],
     options: LLMGenerationOptions
-  ): AsyncGenerator<string> {
+  ): AsyncGenerator<LLMStreamEvent> {
+    const { contents, systemInstruction } = this.toGeminiRequest(messages);
+    const hasTools = Boolean(options.tools?.length);
+    const toolConfig = this.toGeminiToolConfig(options.toolChoice, hasTools);
+
     const response = await this.client.models.generateContentStream({
       model: options.model,
-      contents: this.toGeminiMessages(messages),
+      contents,
       config: {
         temperature: options.temperature,
         maxOutputTokens: options.maxTokens,
+        ...this.toGeminiSamplingConfig(options),
+        ...(systemInstruction ? { systemInstruction } : {}),
+        ...(hasTools
+          ? {
+              tools: [
+                {
+                  functionDeclarations: options.tools!.map((tool) =>
+                    this.toGeminiTool(tool)
+                  ),
+                },
+              ],
+            }
+          : {}),
+        ...(toolConfig ? { toolConfig } : {}),
       },
     });
 
@@ -221,34 +582,51 @@ export class GeminiProvider extends LLMProvider {
     let finalUsage: GenerateContentResponse["usageMetadata"] | undefined;
 
     for await (const chunk of response) {
+      // The pinned `@google/genai` SDK has no native abortSignal for
+      // streaming requests — best-effort mid-stream cancellation by
+      // checking the caller's signal between chunks instead.
+      if (options.signal?.aborted) {
+        throw classifyProviderError(
+          Object.assign(new Error("The operation was aborted."), {
+            name: "AbortError",
+          }),
+          this.providerType
+        );
+      }
+
       if (chunk.usageMetadata) finalUsage = chunk.usageMetadata;
       const text = chunk.text;
       if (text) {
         outputText += text;
-        yield text;
+        yield { type: "text", delta: text };
+      }
+      for (const toolCall of this.extractToolCalls(chunk) ?? []) {
+        yield { type: "tool_call", toolCall };
       }
     }
 
-    options.onUsage?.(
-      finalUsage
-        ? this.normalizeUsage({
-            usage: finalUsage,
-            model: options.model,
-            purpose: "generate_text",
-          })
-        : this.estimateTokenUsage({
-            inputPrompt: this.toGeminiMessages(messages),
-            outputText,
-            model: options.model,
-            purpose: "generate_text",
-            provider: this.providerType,
-          })
-    );
+    const usage = finalUsage
+      ? this.normalizeUsage({
+          usage: finalUsage,
+          model: options.model,
+          purpose: "generate_text",
+        })
+      : this.estimateTokenUsage({
+          inputPrompt: this.toGeminiMessages(messages),
+          outputText,
+          model: options.model,
+          purpose: "generate_text",
+          provider: this.providerType,
+        });
+
+    this.notifyUsage(usage, options.onUsage);
+    yield { type: "usage", usage };
+    yield { type: "done" };
   }
 
   async fetchModels(): Promise<string[]> {
     try {
-      logger.debug("Fetching models from Gemini API");
+      this.logger.debug("Fetching models from Gemini API");
       const response = await fetch(
         "https://generativelanguage.googleapis.com/v1beta/models",
         { headers: { "x-goog-api-key": this.apiKey } }
@@ -261,12 +639,13 @@ export class GeminiProvider extends LLMProvider {
 
       const textGenerationModels = data.models
         .map((model: { name: string }) => model.name)
-        .filter((name: string) => this.textGenModelRegex.test(name));
+        .filter((name: string) => this.textGenModelRegex.test(name))
+        .map((name: string) => name.replace(/^models\//, ""));
 
       return textGenerationModels;
     } catch (error) {
-      logger.error("Error fetching models", { error });
-      return ["gemini-2.5-flash", "gemini-2.0-pro", "gemini-1.5-pro"]; // fallback
+      this.logger.error("Error fetching models", { error });
+      return ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"]; // fallback
     }
   }
 
@@ -282,37 +661,51 @@ export class GeminiProvider extends LLMProvider {
   ): Promise<StructureResult<TSchema>> {
     const promptText = this.combinePromptText(template);
     try {
-      const response = await this.client.models.generateContent({
-        model: options.model,
-        contents: promptText,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: this.toGeminiSchema(zodSchema),
-        },
-      });
+      const response = await this.withResilience(
+        (signal) =>
+          this.raceWithSignal(
+            this.client.models.generateContent({
+              model: options.model,
+              contents: promptText,
+              config: {
+                responseMimeType: "application/json",
+                responseSchema: this.toGeminiSchema(zodSchema),
+                ...this.toGeminiSamplingConfig(options),
+              },
+            }),
+            signal
+          ),
+        {
+          signal: options.signal,
+          timeoutMs: options.timeoutMs,
+          maxRetries: options.maxRetries,
+        }
+      );
 
       const content = response.text;
       if (!content) throw new Error("No response from Gemini");
 
       const result: z.infer<TSchema> = zodSchema.parse(JSON.parse(content));
-      const usage = this.estimateTokenUsage({
-        inputPrompt: promptText,
-        outputText: content,
-        model: options.model,
-        purpose: template.purpose,
-        provider: this.providerType,
-      });
+      const usage = response.usageMetadata
+        ? this.normalizeUsage({
+            usage: response.usageMetadata,
+            model: options.model,
+            purpose: template.purpose,
+          })
+        : this.estimateTokenUsage({
+            inputPrompt: promptText,
+            outputText: content,
+            model: options.model,
+            purpose: template.purpose,
+            provider: this.providerType,
+          });
+
+      this.notifyUsage(usage, options.onUsage);
 
       return { result, usage };
     } catch (err: unknown) {
-      const error = err as Record<string, unknown>;
-      logger.error("runStructuredLLM failed", {
-        error: err,
-        message: error?.message,
-      });
-      throw new Error(
-        `Gemini runStructuredLLM failed: ${String(error?.message ?? err)}`
-      );
+      this.logger.error("runStructuredLLM failed", { error: err });
+      throw classifyProviderError(err, this.providerType);
     }
   }
 
@@ -354,10 +747,10 @@ LLMProvider.register(
     description:
       "Google's flagship AI family, deeply integrated with Search, Docs, and Android. Gemini 2.5 Pro leads on long-context reasoning and multimodal tasks across image, audio, and video.",
   },
-  (apiKey?: string) => {
+  (apiKey?: string, runtimeConfig?: ProviderRuntimeConfig) => {
     if (!apiKey) {
       throw new Error("Gemini API key is required");
     }
-    return new GeminiProvider(apiKey);
+    return new GeminiProvider(apiKey, runtimeConfig);
   }
 );
