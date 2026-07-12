@@ -1,4 +1,4 @@
-# @resume-builder/llm-core
+# @pranavraut033/llm-core
 
 Domain-agnostic, multi-provider LLM core: a provider registry/factory,
 generic LLM/tool types, structured (Zod) output, an injectable token-usage
@@ -18,34 +18,38 @@ just resumes.
   - an optional `onUsage` sink to persist token-usage records,
   - an optional `logger`.
 - **Typed, extensible provider IDs.** `ProviderId` is `keyof ProviderIdRegistry`
-  — not a plain `string`. The six built-ins are seeded into that interface
+  — not a plain `string`. The ten built-ins are seeded into that interface
   and exposed as `BUILTIN_PROVIDERS` constants. To register your own
   provider with full type safety, augment `ProviderIdRegistry` via
   TypeScript declaration merging, then call `LLMProvider.register(...)`
   with that id — see [Custom providers](#custom-providers) below.
 - **Opt-in registration.** Built-in providers are NOT registered by
-  importing `@resume-builder/llm-core`. Import
-  `@resume-builder/llm-core/providers/register-builtins` (once, for its side
-  effects) to register all six, or call `LLMProvider.register` yourself for
+  importing `@pranavraut033/llm-core`. Import
+  `@pranavraut033/llm-core/providers/register-builtins` (once, for its side
+  effects) to register all ten, or call `LLMProvider.register` yourself for
   a custom subset.
 - **`dangerouslyAllowBrowser: true`.** The OpenAI-compatible providers
-  (OpenAI, Grok, Perplexity) construct their client with
-  `dangerouslyAllowBrowser: true`, since this package is designed for
-  client-side / Tauri-style apps where the host already controls how API
-  keys are stored and exposed. Don't ship a real user-supplied API key to an
-  untrusted browser context.
+  (OpenAI, Grok, Perplexity, DeepSeek, Groq, Mistral, OpenRouter) construct
+  their client with `dangerouslyAllowBrowser: true`, since this package is
+  designed for client-side / Tauri-style apps where the host already
+  controls how API keys are stored and exposed. Don't ship a real
+  user-supplied API key to an untrusted browser context.
+- **Unified error taxonomy.** Every provider throws a typed `LLMError`
+  subclass (`src/errors.ts`) — rate limits, auth failures, context-length
+  errors, etc. all normalize to a common shape instead of leaking raw SDK
+  errors.
 
 ## Install
 
 ```bash
-npm install @resume-builder/llm-core zod handlebars
+npm install @pranavraut033/llm-core zod handlebars
 ```
 
 Provider SDKs are **optional peer dependencies** — install only the ones you
 need:
 
 ```bash
-npm install openai            # OpenAI, Grok, Perplexity (OpenAI-compatible)
+npm install openai            # OpenAI, Grok, Perplexity, DeepSeek, Groq, Mistral, OpenRouter (all OpenAI-compatible)
 npm install @anthropic-ai/sdk # Anthropic
 npm install @google/genai     # Gemini
 ```
@@ -56,18 +60,18 @@ npm install @google/genai     # Gemini
 
 | Subpath                                                | Contents                                                                                                                                                                                                         |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@resume-builder/llm-core`                             | Types, `ProviderId`/`BUILTIN_PROVIDERS`, `LLMCoreConfig`, logger, token-usage types/utilities, `ProviderRegistry`/`getRegistry`, `getProviderInstance`, `LLMProvider` base class. **No provider SDKs required.** |
-| `@resume-builder/llm-core/providers/register-builtins` | Side-effect import that registers all 6 built-in providers (OpenAI, Gemini, Grok, Perplexity, Ollama, Anthropic). Requires the relevant SDKs to be installed.                                                    |
-| `@resume-builder/llm-core/providers/openai-compatible` | `OpenAICompatibleProvider` base class for building custom OpenAI-compatible providers. Requires `openai`.                                                                                                        |
-| `@resume-builder/llm-core/prompts`                     | Generic Handlebars prompt-template registry/resolver/validator.                                                                                                                                                  |
+| `@pranavraut033/llm-core`                             | Types, `ProviderId`/`BUILTIN_PROVIDERS`, `LLMCoreConfig`, logger, token-usage types/utilities, `ProviderRegistry`/`getRegistry`, `getProviderInstance`, `LLMProvider` base class. **No provider SDKs required.** |
+| `@pranavraut033/llm-core/providers/register-builtins` | Side-effect import that registers all 10 built-in providers (OpenAI, Gemini, Grok, Groq, Perplexity, Ollama, Anthropic, DeepSeek, Mistral, OpenRouter). Requires the relevant SDKs to be installed.               |
+| `@pranavraut033/llm-core/providers/openai-compatible` | `OpenAICompatibleProvider` base class for building custom OpenAI-compatible providers. Requires `openai`.                                                                                                        |
+| `@pranavraut033/llm-core/prompts`                     | Generic Handlebars prompt-template registry/resolver/validator.                                                                                                                                                  |
 
 ## Quick start
 
 ### 1. Configure key resolution and usage tracking
 
 ```ts
-import type { LLMCoreConfig } from "@resume-builder/llm-core";
-import { BUILTIN_PROVIDERS } from "@resume-builder/llm-core";
+import type { LLMCoreConfig } from "@pranavraut033/llm-core";
+import { BUILTIN_PROVIDERS } from "@pranavraut033/llm-core";
 
 const config: LLMCoreConfig = {
   keyResolver: async (providerId) => {
@@ -84,8 +88,8 @@ const config: LLMCoreConfig = {
 ### 2. Register providers
 
 ```ts
-// Registers OpenAI, Gemini, Grok, Perplexity, Ollama, Anthropic.
-import "@resume-builder/llm-core/providers/register-builtins";
+// Registers OpenAI, Gemini, Grok, Groq, Perplexity, Ollama, Anthropic, DeepSeek, Mistral, OpenRouter.
+import "@pranavraut033/llm-core/providers/register-builtins";
 ```
 
 Or register only what you need / your own custom provider — see
@@ -97,7 +101,7 @@ Or register only what you need / your own custom provider — see
 import {
   BUILTIN_PROVIDERS,
   getProviderInstance,
-} from "@resume-builder/llm-core";
+} from "@pranavraut033/llm-core";
 
 const provider = await getProviderInstance(BUILTIN_PROVIDERS.OPENAI, config);
 
@@ -114,8 +118,8 @@ await config.onUsage?.(usage);
 
 ```ts
 import { z } from "zod";
-import { resolveTemplate } from "@resume-builder/llm-core/prompts";
-import type { PromptTemplate } from "@resume-builder/llm-core/prompts";
+import { resolveTemplate } from "@pranavraut033/llm-core/prompts";
+import type { PromptTemplate } from "@pranavraut033/llm-core/prompts";
 
 interface MyContext {
   topic: string;
@@ -153,7 +157,7 @@ built-in:
 
 ```ts
 // e.g. in a project-wide ambient file such as src/llm-providers.d.ts
-declare module "@resume-builder/llm-core" {
+declare module "@pranavraut033/llm-core" {
   interface ProviderIdRegistry {
     "my-company-llm": true;
   }
@@ -161,7 +165,7 @@ declare module "@resume-builder/llm-core" {
 ```
 
 ```ts
-import { LLMProvider } from "@resume-builder/llm-core";
+import { LLMProvider } from "@pranavraut033/llm-core";
 
 class MyCustomProvider extends LLMProvider {
   // ... implement providerType, streamSupported, fetchModels,
@@ -185,6 +189,30 @@ transpile-only modes). It exists purely so `tsc`/your editor catch a typo'd
 or unregistered provider id before it reaches `LLMProvider.register` or
 `getProviderInstance` at runtime.
 
+## Embeddings
+
+Providers that support it (OpenAI, Gemini, Ollama) implement `embed()`:
+
+```ts
+const { result, usage } = await provider.embed(["hello world"], {
+  model: "text-embedding-3-small",
+});
+```
+
+## Model catalog and pricing
+
+`MODEL_CATALOG`/`getModelInfo` (`src/models/modelCatalog.ts`) expose
+per-model capabilities (context window, vision/tool support, etc.), and
+`MODEL_PRICING`/`computeCostUSD` (`src/tokens/pricing.ts`) give per-model
+token pricing for cost estimation from an `LLMUsageInfo` record.
+
+## Errors
+
+Every provider throws typed `LLMError` subclasses (`src/errors.ts`) —
+e.g. `RateLimitError`, `AuthenticationError`, `ContextLengthError` — instead
+of raw SDK errors, so hosts can branch on error type without knowing which
+provider raised it.
+
 ## Token usage
 
 `LLMUsageInfo` is a persistence-agnostic shape populated by every provider.
@@ -193,7 +221,7 @@ same `provider`/`model`), and `trackTokenUsage` to fill in a `requestId` and
 hand the record to your own `sink`:
 
 ```ts
-import { trackTokenUsage } from "@resume-builder/llm-core";
+import { trackTokenUsage } from "@pranavraut033/llm-core";
 
 await trackTokenUsage(usage, {
   sink: async (u) => myDb.tokenUsage.create(u),

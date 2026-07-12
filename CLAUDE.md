@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working in
-this repository: `@resume-builder/llm-core`.
+this repository: `@pranavraut033/llm-core`.
 
 ## What this package is
 
@@ -28,7 +28,7 @@ code, or `@/` path aliases from the parent repo.
   an undeclared id is a compile-time error. Built-ins are seeded into
   `ProviderIdRegistry` and exposed via `BUILTIN_PROVIDERS`. Consumers add a
   custom provider id by augmenting `ProviderIdRegistry` via declaration
-  merging (`declare module "@resume-builder/llm-core" { interface
+  merging (`declare module "@pranavraut033/llm-core" { interface
 ProviderIdRegistry { "my-id": true } }`), then calling
   `LLMProvider.register(id, metadata, ctor)`. Don't widen `ProviderId` back
   to `string` — that's exactly the safety this interface exists to provide.
@@ -58,8 +58,10 @@ Five entries, each emitted as ESM + CJS + `.d.ts`:
 - `providers/index` — registry/factory/base-class re-exports (no SDKs).
 - `providers/openai-compatible` — `OpenAICompatibleProvider` (requires
   `openai`).
-- `providers/register-builtins` — side-effect import registering all 6
-  built-in providers.
+- `providers/register-builtins` — side-effect import registering all 10
+  built-in providers (OpenAI, Gemini, Grok, Groq, Perplexity, Ollama,
+  Anthropic, DeepSeek, Mistral, OpenRouter — the last four via
+  `OpenAICompatibleProvider`/`genericOpenAICompatible.ts`).
 - `prompts/index` — generic prompt template registry/resolver/validation.
 
 `splitting: true` is REQUIRED — it forces shared chunks so singletons
@@ -115,7 +117,8 @@ Before committing: `npm run lint:fix && npm run format && npm run type-check && 
 - Relative imports only — no `@/` alias, no dependency on the parent
   `resume-builder` repo's `tsconfig`/path mapping.
 - `dangerouslyAllowBrowser: true` is intentional for the OpenAI-compatible
-  providers (OpenAI, Grok, Perplexity) — this package targets client-side /
+  providers (OpenAI, Grok, Perplexity, DeepSeek, Groq, Mistral, OpenRouter) —
+  this package targets client-side /
   Tauri-style hosts. Don't "fix" this without checking the README's design
   notes.
 - Provider metadata (`ProviderMetadata`) is data-only — no React/icon
