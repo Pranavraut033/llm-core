@@ -9,6 +9,8 @@ import { LLMUsageInfo } from "../tokens/usageTypes";
 import {
   ContentPart,
   contentToText,
+  EmbeddingOptions,
+  EmbeddingResult,
   LLMGenerationOptions,
   LLMResult,
   LLMStreamEvent,
@@ -53,6 +55,12 @@ interface OllamaChatResponse {
 
 interface OllamaModel {
   name: string;
+}
+
+interface OllamaEmbedResponse {
+  embeddings?: number[][];
+  /** Present on some Ollama versions; absent on others — best-effort only. */
+  prompt_eval_count?: number;
 }
 
 export class OllamaProvider extends LLMProvider {
@@ -530,6 +538,66 @@ Begin your response with { and end with }`;
 
   protected getProviderName(): string {
     return "Ollama";
+  }
+
+  /**
+   * Ollama's `/api/embed` endpoint accepts `input` as either a single
+   * string or an array of strings and returns `{ embeddings: number[][] }`.
+   * It doesn't reliably report real token usage the way `/api/chat` does —
+   * `prompt_eval_count` is used when present, otherwise usage is estimated
+   * from the input text (no completion tokens either way).
+   */
+  async embed(options: EmbeddingOptions): Promise<EmbeddingResult> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/embed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: options.model,
+          input: options.input,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw Object.assign(new Error(`Ollama API error: ${error}`), {
+          status: response.status,
+        });
+      }
+
+      const data = (await response.json()) as OllamaEmbedResponse;
+      const embeddings = data.embeddings ?? [];
+
+      const inputText =
+        typeof options.input === "string"
+          ? options.input
+          : options.input.join("\n");
+
+      const usage: LLMUsageInfo =
+        data.prompt_eval_count !== undefined
+          ? {
+              promptTokens: data.prompt_eval_count,
+              completionTokens: 0,
+              totalTokens: data.prompt_eval_count,
+              model: options.model,
+              purpose: "embed",
+              provider: this.providerType,
+            }
+          : this.estimateTokenUsage({
+              inputPrompt: inputText,
+              outputText: "",
+              model: options.model,
+              purpose: "embed",
+              provider: this.providerType,
+            });
+
+      this.notifyUsage(usage);
+
+      return { embeddings, usage };
+    } catch (error) {
+      this.logger.error("embed failed", { error });
+      throw classifyProviderError(error, this.providerType);
+    }
   }
 
   async validateConnection(): Promise<{ success: boolean; message: string }> {

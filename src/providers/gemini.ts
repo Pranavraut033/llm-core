@@ -20,6 +20,8 @@ import { LLMUsageInfo } from "../tokens/usageTypes";
 import {
   ContentPart,
   contentToText,
+  EmbeddingOptions,
+  EmbeddingResult,
   LLMGenerationOptions,
   LLMResult,
   LLMStreamEvent,
@@ -651,6 +653,44 @@ export class GeminiProvider extends LLMProvider {
 
   protected getProviderName(): string {
     return "Gemini";
+  }
+
+  /**
+   * `@google/genai@0.3.1`'s `models.embedContent` (the actual method the
+   * pinned SDK exposes — there is no separate `embed`/`embedText`) returns
+   * `{ embeddings?: ContentEmbedding[] }`, each with `values?: number[]` and
+   * no token-usage field at all (that's Vertex-only). Usage is estimated
+   * from the input text, following `estimateTokenUsage`'s pattern.
+   */
+  async embed(options: EmbeddingOptions): Promise<EmbeddingResult> {
+    try {
+      const inputs =
+        typeof options.input === "string" ? [options.input] : options.input;
+
+      const response = await this.client.models.embedContent({
+        model: options.model,
+        contents: inputs,
+      });
+
+      const embeddings = (response.embeddings ?? []).map(
+        (embedding) => embedding.values ?? []
+      );
+
+      const usage = this.estimateTokenUsage({
+        inputPrompt: inputs.join("\n"),
+        outputText: "",
+        model: options.model,
+        purpose: "embed",
+        provider: this.providerType,
+      });
+
+      this.notifyUsage(usage);
+
+      return { embeddings, usage };
+    } catch (error) {
+      this.logger.error("embed failed", { error });
+      throw classifyProviderError(error, this.providerType);
+    }
   }
 
   async runStructuredLLM<TSchema extends ZodTypeAny>(

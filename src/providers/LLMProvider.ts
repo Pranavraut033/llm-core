@@ -16,6 +16,8 @@ import { ProviderId } from "../providerType";
 import { LLMUsageInfo } from "../tokens/usageTypes";
 import {
   contentToText,
+  EmbeddingOptions,
+  EmbeddingResult,
   LLMGenerationOptions,
   LLMResult,
   LLMStreamEvent,
@@ -173,6 +175,16 @@ export abstract class LLMProvider {
     zodSchema: TSchema,
     schemaName: string
   ): Promise<StructureResult<TSchema>>;
+
+  /**
+   * Generate embeddings for the given input. Only OpenAI, Gemini, and
+   * Ollama expose an embeddings endpoint among the built-in providers —
+   * everyone else (Anthropic, Grok, Perplexity) inherits this default,
+   * which fails loud and specific rather than silently doing nothing.
+   */
+  async embed(_options: EmbeddingOptions): Promise<EmbeddingResult> {
+    throw new Error(`Embeddings are not supported by ${this.providerType}`);
+  }
 
   /**
    * Returns 0.7 for standard chat models and undefined for reasoning models

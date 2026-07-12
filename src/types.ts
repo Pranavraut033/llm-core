@@ -181,6 +181,23 @@ export type LLMStreamEvent =
   | { type: "usage"; usage: LLMUsageInfo }
   | { type: "done" };
 
+// ── Embeddings ───────────────────────────────────────────────────────────
+
+/**
+ * Options for `LLMProvider.embed()`. Only OpenAI, Gemini, and Ollama support
+ * embeddings among the built-in providers — see `LLMProvider.embed`'s
+ * default implementation for the other providers' behavior.
+ */
+export interface EmbeddingOptions {
+  model: string;
+  input: string | string[];
+}
+
+export interface EmbeddingResult {
+  embeddings: number[][];
+  usage: LLMUsageInfo;
+}
+
 export interface LLMGenerationOptions {
   model: string;
   temperature?: number;

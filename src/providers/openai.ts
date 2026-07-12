@@ -1,6 +1,9 @@
 import { ProviderRuntimeConfig } from "../config";
+import { classifyProviderError } from "../errors";
 import { createConsoleLogger } from "../logger";
 import { BUILTIN_PROVIDERS, ProviderId } from "../providerType";
+import { LLMUsageInfo } from "../tokens/usageTypes";
+import { EmbeddingOptions, EmbeddingResult } from "../types";
 import { LLMProvider } from "./LLMProvider";
 import { OpenAICompatibleProvider } from "./openaiCompatibleProvider";
 
@@ -45,6 +48,34 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
 
   protected getProviderName(): string {
     return "OpenAI";
+  }
+
+  async embed(options: EmbeddingOptions): Promise<EmbeddingResult> {
+    try {
+      const response = await this.client.embeddings.create({
+        model: options.model,
+        input: options.input,
+      });
+
+      const embeddings = response.data
+        .sort((a, b) => a.index - b.index)
+        .map((item) => item.embedding);
+
+      const usage: LLMUsageInfo = {
+        promptTokens: response.usage.prompt_tokens,
+        completionTokens: 0,
+        totalTokens: response.usage.total_tokens,
+        provider: this.providerType,
+        model: options.model,
+        purpose: "embed",
+      };
+
+      this.notifyUsage(usage);
+
+      return { embeddings, usage };
+    } catch (error) {
+      throw classifyProviderError(error, this.providerType);
+    }
   }
 }
 
