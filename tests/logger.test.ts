@@ -37,4 +37,16 @@ describe("createConsoleLogger", () => {
     expect(spy).toHaveBeenCalledWith("[Tag] no data here", "");
     spy.mockRestore();
   });
+
+  it("unwraps Error values so message/stack survive serialization", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = new Error("boom");
+
+    createConsoleLogger("Tag").error("failed", { error: err });
+
+    expect(spy).toHaveBeenCalledWith("[Tag] failed", {
+      error: { name: "Error", message: "boom", stack: err.stack },
+    });
+    spy.mockRestore();
+  });
 });
