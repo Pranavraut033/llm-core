@@ -21,7 +21,15 @@ import {
 import { LLMProvider, StructureResult } from "./LLMProvider";
 
 interface OllamaToolCall {
-  function: { name: string; arguments: Record<string, unknown> };
+  /** Present on Ollama >=0.9 — a stable per-call id, e.g. "call_xxxxx". */
+  id?: string;
+  function: {
+    name: string;
+    arguments: Record<string, unknown>;
+    /** Stable position of this call within the full turn, even when tool
+     *  calls are split one-per-chunk across a stream. */
+    index?: number;
+  };
 }
 
 interface OllamaChatMessage {
@@ -73,31 +81,6 @@ export class OllamaProvider extends LLMProvider {
   ) {
     super(runtimeConfig, createConsoleLogger("Ollama"));
     this.baseUrl = baseUrl;
-  }
-
-  /**
-   * Inject JSON schema into prompt for better structured output
-   * Ollama's format:"json" only encourages JSON, doesn't validate structure
-   */
-  private injectSchemaIntoPrompt(prompt: string, schemaObject: object): string {
-    return `${prompt}
-
-You must return a valid JSON object that conforms to this JSON Schema:
-
-${JSON.stringify(schemaObject, null, 2)}
-
-Rules:
-- Output ONLY a raw JSON object
-- Do NOT wrap in markdown
-- Do NOT explain anything
-- Do NOT repeat the schema
-- Every field must match the required type
-- Include all required fields
-- If a string field is unknown, return an empty string
-- If an array field is unknown, return []
-- If an object field is unknown, return {}
-
-Begin your response with { and end with }`;
   }
 
   private toOllamaMessages(messages: PromptMessage[]): OllamaChatMessage[] {
@@ -209,21 +192,58 @@ Begin your response with { and end with }`;
     return tools.map((tool) => this.toOllamaTool(tool));
   }
 
+  /**
+   * Prefers Ollama's own `id`/`function.index` when present. Falling back
+   * to the local array position (as we used to) breaks in streaming: when
+   * a model emits multiple tool calls one-per-chunk, every chunk's array
+   * has length 1, so a local index always resolves to 0 and collides.
+   */
   private extractToolCalls(
     message: OllamaChatResponse["message"]
   ): ToolCall[] | undefined {
     const calls = message?.tool_calls;
     if (!calls?.length) return undefined;
     return calls.map((call, index) => ({
-      id: `${call.function.name}_${index}`,
+      id: call.id ?? `${call.function.name}_${call.function.index ?? index}`,
       name: call.function.name,
       arguments: call.function.arguments ?? {},
     }));
   }
 
   /**
+   * Ollama has no numeric thinking budget (no equivalent of Anthropic's
+   * `budget_tokens`/Gemini's `thinkingConfig`) — thinking and content share
+   * the same `num_predict` pool, so an unbounded "thinking" phase can
+   * consume the entire budget and leave zero tokens for content (observed:
+   * done_reason "length" with empty content on a hybrid-reasoning model
+   * like qwen3.5 with no maxTokens set). Nothing in this package surfaces
+   * thinking text to callers either, so there's no upside to leaving it on
+   * by default — `think` defaults to false and only turns on when the
+   * caller explicitly opts in via a positive `thinkingBudget`.
+   */
+  private resolveThink(options: LLMGenerationOptions): boolean {
+    return options.thinkingBudget !== undefined && options.thinkingBudget > 0;
+  }
+
+  /**
+   * Ollama allocates its KV-cache per request sized by `num_ctx`, which
+   * defaults (unset) to a small value — 2048-4096 depending on version —
+   * regardless of what the model itself supports. That default is silent:
+   * once prompt + output tokens hit it, generation stops early
+   * (done_reason: "length") with no error, no matter how high
+   * `num_predict`/maxTokens is set. Observed live: a real resume + job
+   * description + JSON-schema prompt for ATS analysis was cut off mid-JSON
+   * at ~360 output tokens even with maxTokens=8192, because the *context
+   * window* — not the output budget — was the actual ceiling. Every
+   * resume-builder prompt (resume + job description + schema) is well
+   * past Ollama's tiny default, so a low num_ctx isn't a real constraint
+   * worth respecting by default — it's a footgun.
+   */
+  private static readonly DEFAULT_NUM_CTX = 8192;
+
+  /**
    * Sampling passthrough params supported inside Ollama's request `options`
-   * object. No thinkingBudget/reasoning_effort on Ollama.
+   * object.
    */
   private toOllamaSamplingOptions(options: LLMGenerationOptions): {
     top_p?: number;
@@ -232,8 +252,10 @@ Begin your response with { and end with }`;
     stop?: string[];
     frequency_penalty?: number;
     presence_penalty?: number;
+    num_ctx: number;
   } {
     return {
+      num_ctx: OllamaProvider.DEFAULT_NUM_CTX,
       ...(options.topP !== undefined ? { top_p: options.topP } : {}),
       ...(options.topK !== undefined ? { top_k: options.topK } : {}),
       ...(options.seed !== undefined ? { seed: options.seed } : {}),
@@ -253,8 +275,11 @@ Begin your response with { and end with }`;
     options: {
       temperature?: number;
       maxTokens?: number;
-      jsonFormat?: boolean;
+      /** "json" for loose mode, or a JSON Schema object for Ollama's
+       *  native grammar-constrained structured output (>=0.5). */
+      format?: "json" | object;
       tools?: OllamaTool[];
+      think?: boolean;
       sampling?: ReturnType<OllamaProvider["toOllamaSamplingOptions"]>;
       signal?: AbortSignal;
     } = {}
@@ -267,8 +292,9 @@ Begin your response with { and end with }`;
         model,
         messages,
         stream: false,
-        format: options.jsonFormat ? "json" : undefined,
+        format: options.format,
         tools: options.tools,
+        think: options.think,
         options: {
           temperature: options.temperature,
           num_predict: options.maxTokens,
@@ -352,6 +378,7 @@ Begin your response with { and end with }`;
           temperature: options.temperature,
           maxTokens: options.maxTokens,
           tools: this.resolveOllamaTools(options.tools, options.toolChoice),
+          think: this.resolveThink(options),
           sampling: this.toOllamaSamplingOptions(options),
           signal,
         }),
@@ -403,6 +430,7 @@ Begin your response with { and end with }`;
         messages: this.toOllamaMessages(messages),
         stream: true,
         tools: this.resolveOllamaTools(options.tools, options.toolChoice),
+        think: this.resolveThink(options),
         options: {
           temperature: options.temperature,
           num_predict: options.maxTokens,
@@ -473,11 +501,8 @@ Begin your response with { and end with }`;
     options: LLMGenerationOptions,
     zodSchema: TSchema
   ): Promise<StructureResult<TSchema>> {
-    let promptText = this.combinePromptText(template);
-
+    const promptText = this.combinePromptText(template);
     const schemaJson = z.toJSONSchema(zodSchema);
-
-    promptText = this.injectSchemaIntoPrompt(promptText, schemaJson);
 
     try {
       const data = await this.withResilience(
@@ -488,7 +513,12 @@ Begin your response with { and end with }`;
             {
               temperature: options.temperature,
               maxTokens: options.maxTokens,
-              jsonFormat: true,
+              // Native grammar-constrained structured output (Ollama >=0.5)
+              // — passing the JSON Schema directly guarantees the response
+              // matches it, rather than format:"json" + hoping the model
+              // follows a schema pasted into the prompt.
+              format: schemaJson,
+              think: this.resolveThink(options),
               sampling: this.toOllamaSamplingOptions(options),
               signal,
             }

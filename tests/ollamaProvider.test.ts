@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { OllamaProvider } from "../src/providers/ollama";
 import { textOnly } from "../src/streamUtils";
@@ -128,7 +129,11 @@ describe("OllamaProvider streaming", () => {
 
     const [, requestInit] = fetchMock.mock.calls[0];
     const sentBody = JSON.parse(requestInit.body as string);
-    expect(sentBody.options).toEqual({ temperature: 0.3, num_predict: 42 });
+    expect(sentBody.options).toEqual({
+      temperature: 0.3,
+      num_predict: 42,
+      num_ctx: 8192,
+    });
   });
 });
 
@@ -160,6 +165,7 @@ describe("OllamaProvider sampling params (Cluster A)", () => {
     expect(sentBody.options).toEqual({
       temperature: undefined,
       num_predict: undefined,
+      num_ctx: 8192,
       top_p: 0.9,
       top_k: 40,
       seed: 7,
@@ -186,6 +192,7 @@ describe("OllamaProvider sampling params (Cluster A)", () => {
     expect(sentBody.options).toEqual({
       temperature: undefined,
       num_predict: undefined,
+      num_ctx: 8192,
     });
   });
 });
@@ -471,5 +478,313 @@ describe("OllamaProvider content parts (Cluster D multimodal)", () => {
     const [, requestInit] = fetchMock.mock.calls[0];
     const sentBody = JSON.parse(requestInit.body as string);
     expect(sentBody.messages[0]).toEqual({ role: "user", content: "hi" });
+  });
+});
+
+describe("OllamaProvider tool_calls id resolution", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("prefers Ollama's real id over the synthesized name_index fallback", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call_abc123",
+                function: {
+                  index: 0,
+                  name: "get_weather",
+                  arguments: { city: "SF" },
+                },
+              },
+            ],
+          },
+        }),
+      })
+    );
+
+    const provider = new OllamaProvider("http://localhost:11434");
+    const result = await provider.runLLM(
+      [{ role: "user", content: "weather in SF?" }],
+      { model: "llama3" }
+    );
+
+    expect(result.toolCalls).toEqual([
+      { id: "call_abc123", name: "get_weather", arguments: { city: "SF" } },
+    ]);
+  });
+
+  it("does not collide ids when parallel tool calls stream one-per-chunk (regression)", async () => {
+    // Reproduces a real Ollama streaming shape: two tool calls, each
+    // arriving alone in its own chunk. A naive per-chunk local array
+    // index would give both calls id "get_weather_0".
+    const body = ndjsonStream([
+      {
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              function: {
+                index: 0,
+                name: "get_weather",
+                arguments: { city: "Boston" },
+              },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              function: {
+                index: 1,
+                name: "get_weather",
+                arguments: { city: "Chicago" },
+              },
+            },
+          ],
+        },
+      },
+      { done: true, prompt_eval_count: 5, eval_count: 2 },
+    ]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, body }));
+
+    const provider = new OllamaProvider("http://localhost:11434");
+    const toolCallEvents: LLMStreamEvent[] = [];
+    for await (const event of provider.runLLM(
+      [{ role: "user", content: "weather in Boston and Chicago?" }],
+      { model: "llama3", stream: true }
+    )) {
+      if (event.type === "tool_call") toolCallEvents.push(event);
+    }
+
+    expect(toolCallEvents).toEqual([
+      {
+        type: "tool_call",
+        toolCall: {
+          id: "get_weather_0",
+          name: "get_weather",
+          arguments: { city: "Boston" },
+        },
+      },
+      {
+        type: "tool_call",
+        toolCall: {
+          id: "get_weather_1",
+          name: "get_weather",
+          arguments: { city: "Chicago" },
+        },
+      },
+    ]);
+    const ids = toolCallEvents.map(
+      (e) => (e as { toolCall: { id: string } }).toolCall.id
+    );
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("OllamaProvider.runStructuredLLM", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const schema = z.object({
+    name: z.string(),
+    age: z.number(),
+  });
+
+  it("sends the JSON Schema itself as `format` for native constrained decoding", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        message: { role: "assistant", content: '{"name":"Alice","age":30}' },
+        prompt_eval_count: 10,
+        eval_count: 5,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new OllamaProvider("http://localhost:11434");
+    const result = await provider.runStructuredLLM(
+      {
+        purpose: "test",
+        estimatedTokens: 10,
+        systemPrompt: "",
+        userPrompt: "Alice is 30",
+      },
+      { model: "llama3" },
+      schema
+    );
+
+    expect(result.result).toEqual({ name: "Alice", age: 30 });
+
+    const [, requestInit] = fetchMock.mock.calls[0];
+    const sentBody = JSON.parse(requestInit.body as string);
+    expect(sentBody.format).toMatchObject({
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        age: { type: "number" },
+      },
+      required: ["name", "age"],
+    });
+  });
+
+  it("throws when the response fails schema validation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          message: { role: "assistant", content: '{"name":"Alice"}' },
+        }),
+      })
+    );
+
+    const provider = new OllamaProvider("http://localhost:11434");
+    await expect(
+      provider.runStructuredLLM(
+        {
+          purpose: "test",
+          estimatedTokens: 10,
+          systemPrompt: "",
+          userPrompt: "Alice",
+        },
+        { model: "llama3" },
+        schema
+      )
+    ).rejects.toThrow();
+  });
+});
+
+describe("OllamaProvider think param (thinking-budget starvation guard)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults think:false when thinkingBudget is unset, so hybrid-reasoning models can't starve content of tokens", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ message: { role: "assistant", content: "ok" } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new OllamaProvider("http://localhost:11434");
+    await provider.runLLM([{ role: "user", content: "hi" }], {
+      model: "llama3",
+    });
+
+    const [, requestInit] = fetchMock.mock.calls[0];
+    const sentBody = JSON.parse(requestInit.body as string);
+    expect(sentBody.think).toBe(false);
+  });
+
+  it("enables think:true when the caller opts in via a positive thinkingBudget", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ message: { role: "assistant", content: "ok" } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new OllamaProvider("http://localhost:11434");
+    await provider.runLLM([{ role: "user", content: "hi" }], {
+      model: "llama3",
+      thinkingBudget: 1024,
+    });
+
+    const [, requestInit] = fetchMock.mock.calls[0];
+    const sentBody = JSON.parse(requestInit.body as string);
+    expect(sentBody.think).toBe(true);
+  });
+
+  it("sends think:false on the streaming request body too", async () => {
+    const body = ndjsonStream([
+      {
+        message: { role: "assistant", content: "hi" },
+        done: true,
+        prompt_eval_count: 1,
+        eval_count: 1,
+      },
+    ]);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, body });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new OllamaProvider("http://localhost:11434");
+    for await (const _chunk of provider.runLLM(
+      [{ role: "user", content: "hi" }],
+      { model: "llama3", stream: true }
+    )) {
+      // drain
+    }
+
+    const [, requestInit] = fetchMock.mock.calls[0];
+    const sentBody = JSON.parse(requestInit.body as string);
+    expect(sentBody.think).toBe(false);
+  });
+});
+
+describe("OllamaProvider num_ctx default (context-window starvation guard)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults num_ctx to 8192 so real-sized prompts don't silently truncate output", async () => {
+    // Ollama allocates its KV-cache per request sized by num_ctx, which
+    // defaults (unset) to a small value regardless of what the model
+    // supports. Once prompt + output tokens hit it, generation stops early
+    // (done_reason: "length") with no error, no matter how high
+    // num_predict is set — observed live with a real resume + job
+    // description prompt for ATS analysis.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ message: { role: "assistant", content: "ok" } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new OllamaProvider("http://localhost:11434");
+    await provider.runLLM([{ role: "user", content: "hi" }], {
+      model: "llama3",
+    });
+
+    const [, requestInit] = fetchMock.mock.calls[0];
+    const sentBody = JSON.parse(requestInit.body as string);
+    expect(sentBody.options.num_ctx).toBe(8192);
+  });
+
+  it("applies the same num_ctx default to runStructuredLLM", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        message: { role: "assistant", content: '{"name":"Alice","age":30}' },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new OllamaProvider("http://localhost:11434");
+    await provider.runStructuredLLM(
+      {
+        purpose: "test",
+        estimatedTokens: 10,
+        systemPrompt: "",
+        userPrompt: "Alice is 30",
+      },
+      { model: "llama3" },
+      z.object({ name: z.string(), age: z.number() })
+    );
+
+    const [, requestInit] = fetchMock.mock.calls[0];
+    const sentBody = JSON.parse(requestInit.body as string);
+    expect(sentBody.options.num_ctx).toBe(8192);
   });
 });
