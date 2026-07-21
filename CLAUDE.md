@@ -50,7 +50,7 @@ ProviderIdRegistry { "my-id": true } }`), then calling
 
 ## Build entry points (tsup, `tsup.config.ts`)
 
-Five entries, each emitted as ESM + CJS + `.d.ts`:
+Seven entries, each emitted as ESM + CJS + `.d.ts`:
 
 - `index` — types, `ProviderId`/`BUILTIN_PROVIDERS`, `LLMCoreConfig`, logger,
   token-usage types/utilities, `ProviderRegistry`/`getRegistry`,
@@ -61,8 +61,18 @@ Five entries, each emitted as ESM + CJS + `.d.ts`:
 - `providers/register-builtins` — side-effect import registering all 10
   built-in providers (OpenAI, Gemini, Grok, Groq, Perplexity, Ollama,
   Anthropic, DeepSeek, Mistral, OpenRouter — the last four via
-  `OpenAICompatibleProvider`/`genericOpenAICompatible.ts`).
+  `OpenAICompatibleProvider`/`genericOpenAICompatible.ts`). Peer SDKs are
+  lazily `import()`ed inside each provider's methods, not at module load —
+  `isProviderSDKAvailable()` (`src/providers/sdkAvailability.ts`) checks
+  whether a given provider's SDK is installed without importing it.
 - `prompts/index` — generic prompt template registry/resolver/validation.
+- `core/index` — framework-agnostic streaming controllers (`createCompletion`,
+  `createChat`, `createObject`), each a plain observable store shaped for
+  `useSyncExternalStore` (`{ getSnapshot(), subscribe(cb), ...actions }`). No
+  React import here.
+- `react/index` — React hooks (`useCompletion`, `useChat`, `useObject`,
+  `useModels`) wrapping the `core` controllers via `useSyncExternalStore`.
+  `react` is an optional peer dep.
 
 `splitting: true` is REQUIRED — it forces shared chunks so singletons
 (`ProviderRegistry`, `TemplateRegistry`) are the same module instance across
@@ -88,6 +98,8 @@ npm run lint           # eslint .
 npm run lint:fix       # eslint . --fix
 npm run format         # prettier --write .
 npm run format:check   # prettier --check .
+npm run bench           # cold-import benchmark (benchmarks/bench.mjs) — measures
+                         # provider-loading cost before/after lazy SDK imports
 ```
 
 Before committing: `npm run lint:fix && npm run format && npm run type-check && npm run test:run`.
