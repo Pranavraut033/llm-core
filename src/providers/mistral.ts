@@ -17,7 +17,8 @@ export class MistralProvider extends OpenAICompatibleProvider {
 
   async fetchModels(): Promise<string[]> {
     try {
-      const response = await this.client.models.list();
+      const client = await this.getClient();
+      const response = await client.models.list();
       return response.data.map((model) => model.id);
     } catch (error) {
       this.logger.error("Error fetching models", { error });
@@ -40,6 +41,7 @@ LLMProvider.register(
     requiresAuth: true,
     description:
       "French AI lab behind the Mistral and Codestral model families — open-weight-friendly, strong on efficiency and multilingual tasks.",
+    requiredPeerDependency: "openai",
   },
   (apiKey?: string, runtimeConfig?: ProviderRuntimeConfig) => {
     if (!apiKey) {

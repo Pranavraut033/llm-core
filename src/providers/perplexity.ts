@@ -18,7 +18,13 @@ const PERPLEXITY_FALLBACK_MODELS = Array.isArray(fallbackModels?.data)
 
 export class PerplexityProvider extends OpenAICompatibleProvider {
   public readonly providerType = BUILTIN_PROVIDERS.PERPLEXITY;
-  private apiKey: string;
+  /**
+   * Named distinctly from the base class's own private `apiKey` field
+   * (used for lazy SDK client construction) — Perplexity additionally
+   * needs the raw key here for its `fetch`-based `fetchModels` call,
+   * which bypasses the OpenAI SDK client entirely.
+   */
+  private readonly perplexityApiKey: string;
 
   constructor(apiKey: string, runtimeConfig?: ProviderRuntimeConfig) {
     super(
@@ -26,7 +32,7 @@ export class PerplexityProvider extends OpenAICompatibleProvider {
       runtimeConfig,
       createConsoleLogger("Perplexity")
     );
-    this.apiKey = apiKey;
+    this.perplexityApiKey = apiKey;
   }
 
   async fetchModels(): Promise<string[]> {
@@ -34,7 +40,7 @@ export class PerplexityProvider extends OpenAICompatibleProvider {
 
     try {
       const response = await fetch("https://api.perplexity.ai/v1/models", {
-        headers: { Authorization: `Bearer ${this.apiKey}` },
+        headers: { Authorization: `Bearer ${this.perplexityApiKey}` },
       });
       const data = await response.json();
 
@@ -104,6 +110,7 @@ OpenAICompatibleProvider.register(
     description:
       "AI-powered answer engine that combines web search with LLM responses, citing sources in real time. Positioned as a search engine replacement rather than a pure chat assistant.",
     defaultModels: ["sonar-pro", "sonar-reasoning-pro", "sonar"],
+    requiredPeerDependency: "openai",
   },
   (apiKey?: string, runtimeConfig?: ProviderRuntimeConfig) => {
     if (!apiKey) {

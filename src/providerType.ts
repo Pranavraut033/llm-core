@@ -1,14 +1,14 @@
 /**
  * Module-augmentable registry of known provider ids.
  *
- * The package seeds this with its 6 built-in providers. A consumer
+ * The package seeds this with its 10 built-in providers. A consumer
  * registering a custom provider should augment this interface so
  * `ProviderId` includes their id at compile time — `register()`,
  * `getProviderInstance()`, `has()`, etc. will then accept (and
  * autocomplete) it like any built-in:
  *
  * ```ts
- * declare module "@resume-builder/llm-core" {
+ * declare module "@pranavraut033/llm-core" {
  *   interface ProviderIdRegistry {
  *     "my-company-llm": true;
  *   }
@@ -35,7 +35,7 @@ export interface ProviderIdRegistry {
 
 /**
  * Provider identifier — a union of every key declared in
- * `ProviderIdRegistry` (the 6 built-ins, plus whatever consumers have
+ * `ProviderIdRegistry` (the 10 built-ins, plus whatever consumers have
  * augmented in). Not a plain `string`: passing an arbitrary, undeclared
  * string where a `ProviderId` is expected is a type error by design.
  */
@@ -60,7 +60,7 @@ export const BUILTIN_PROVIDERS = {
 } as const satisfies Record<string, ProviderId>;
 
 /**
- * The 6 built-in provider ids specifically — unlike `ProviderId`, this
+ * The 10 built-in provider ids specifically — unlike `ProviderId`, this
  * union is fixed and unaffected by consumer augmentation.
  */
 export type BuiltinProviderId =

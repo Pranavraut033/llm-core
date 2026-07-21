@@ -1,23 +1,27 @@
 /**
- * Opt-in registration entry point for the 6 built-in providers.
+ * Opt-in registration entry point for the 10 built-in providers.
  *
  * Importing this module (for its side effects) registers OpenAI, Gemini,
- * Grok, Perplexity, Ollama, and Anthropic with the shared
- * `ProviderRegistry`. Without importing this (or registering providers
- * yourself via `LLMProvider.register`), `getProviderInstance` will throw
- * a "not registered" error.
+ * Grok, Groq, Perplexity, Ollama, Anthropic, DeepSeek, Mistral, and
+ * OpenRouter with the shared `ProviderRegistry`. Without importing this
+ * (or registering providers yourself via `LLMProvider.register`),
+ * `getProviderInstance` will throw a "not registered" error.
  *
  * Usage:
  * ```ts
- * import "@resume-builder/llm-core/providers/register-builtins";
- * import { getProviderInstance } from "@resume-builder/llm-core/providers";
+ * import "@pranavraut033/llm-core/providers/register-builtins";
+ * import { getProviderInstance } from "@pranavraut033/llm-core/providers";
  * ```
  *
- * Each provider module pulls in its corresponding SDK (`openai`,
- * `@anthropic-ai/sdk`, `@google/genai`) — those are optional peer
- * dependencies, so only install the SDKs for the providers you actually
- * use, or register a custom subset manually instead of importing this
- * barrel.
+ * Importing this module never requires any of the optional peer-dependency
+ * SDKs (`openai`, `@anthropic-ai/sdk`, `@google/genai`) to be installed —
+ * only registration/metadata code runs at import time. Each SDK is resolved
+ * lazily, per provider, the first time a method is actually called on an
+ * instance of that provider (e.g. `runLLM`, `fetchModels`); if the required
+ * SDK isn't installed at that point, the call throws
+ * `ProviderSDKNotInstalledError` with a clear message instead of a raw
+ * "Cannot find package" error. Use `isProviderSDKAvailable(providerId)` to
+ * check ahead of time whether a given provider's SDK is installed.
  */
 
 import "./anthropic";

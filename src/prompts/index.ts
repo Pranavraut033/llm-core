@@ -37,14 +37,12 @@ export function getPromptByPurpose<
   options?: Parameters<typeof resolveTemplate>[2]
 ): ResolvedPrompt<TPurpose> {
   const template = templateRegistry.get(purpose) as
-    | PromptTemplate<TContext, TPurpose>
-    | undefined;
+    PromptTemplate<TContext, TPurpose> | undefined;
 
   const resolved =
     template ??
     (templateRegistry.getByPurpose(purpose) as
-      | PromptTemplate<TContext, TPurpose>
-      | undefined);
+      PromptTemplate<TContext, TPurpose> | undefined);
 
   if (!resolved) {
     throw new Error(`No template found for purpose: ${purpose}`);

@@ -1,9 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 
 import { ProviderRuntimeConfig } from "../config";
-import { classifyProviderError } from "../errors";
+import { classifyProviderError, ProviderSDKNotInstalledError } from "../errors";
 import { createConsoleLogger } from "../logger";
 import { ResolvedPrompt } from "../prompts/types";
 import { BUILTIN_PROVIDERS, ProviderId } from "../providerType";
@@ -18,6 +16,8 @@ import {
   ToolDefinition,
 } from "../types";
 import { LLMProvider, StructureResult } from "./LLMProvider";
+
+import type Anthropic from "@anthropic-ai/sdk";
 
 export class AnthropicProvider extends LLMProvider {
   public get providerType(): ProviderId {
@@ -56,11 +56,47 @@ export class AnthropicProvider extends LLMProvider {
     };
   }
 
-  private client: Anthropic;
+  /**
+   * Not set eagerly — tests pre-populate this with a mock client directly
+   * (`(provider as unknown as {client}).client = {...}`), which `getClient`
+   * honors by returning it as-is without ever touching the real SDK.
+   */
+  private client?: Anthropic;
+  private readonly apiKey: string;
+  private clientPromise: Promise<Anthropic> | null = null;
 
   constructor(apiKey: string, runtimeConfig?: ProviderRuntimeConfig) {
     super(runtimeConfig, createConsoleLogger("Anthropic"));
-    this.client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+    this.apiKey = apiKey;
+  }
+
+  /**
+   * Lazily constructs (and caches) the real `@anthropic-ai/sdk` client on
+   * first use, so merely importing/registering `AnthropicProvider` never
+   * requires the `@anthropic-ai/sdk` package to be installed; only
+   * actually calling a method that talks to the API does.
+   */
+  private async getClient(): Promise<Anthropic> {
+    if (this.client) return this.client;
+    if (!this.clientPromise) {
+      this.clientPromise = import("@anthropic-ai/sdk")
+        .then(({ default: AnthropicCtor }) => {
+          const client = new AnthropicCtor({
+            apiKey: this.apiKey,
+            dangerouslyAllowBrowser: true,
+          });
+          this.client = client;
+          return client;
+        })
+        .catch((err: unknown) => {
+          throw new ProviderSDKNotInstalledError(
+            "@anthropic-ai/sdk",
+            this.providerType,
+            err
+          );
+        });
+    }
+    return this.clientPromise;
   }
 
   private extractTextResponse(response: unknown): string {
@@ -249,9 +285,7 @@ export class AnthropicProvider extends LLMProvider {
       options.cacheControl === true || options.cacheControl === "tools";
 
     const systemParam:
-      | string
-      | Anthropic.Messages.TextBlockParam[]
-      | undefined = system
+      string | Anthropic.Messages.TextBlockParam[] | undefined = system
       ? cacheSystem
         ? [
             {
@@ -317,18 +351,21 @@ export class AnthropicProvider extends LLMProvider {
       .map((message) => contentToText(message.content))
       .join("\n\n");
 
-    return this.withResilience(
-      (signal) =>
-        this.client.messages.create(
-          { ...this.toAnthropicRequest(messages, options), stream: false },
-          { signal }
-        ),
-      {
-        signal: options.signal,
-        timeoutMs: options.timeoutMs,
-        maxRetries: options.maxRetries,
-      }
-    )
+    return this.getClient()
+      .then((client) =>
+        this.withResilience(
+          (signal) =>
+            client.messages.create(
+              { ...this.toAnthropicRequest(messages, options), stream: false },
+              { signal }
+            ),
+          {
+            signal: options.signal,
+            timeoutMs: options.timeoutMs,
+            maxRetries: options.maxRetries,
+          }
+        )
+      )
       .then((response) => {
         const content = this.extractTextResponse(response);
         const toolCalls = this.extractToolCalls(response);
@@ -364,7 +401,8 @@ export class AnthropicProvider extends LLMProvider {
     messages: PromptMessage[],
     options: LLMGenerationOptions
   ): AsyncGenerator<LLMStreamEvent> {
-    const stream = this.client.messages.stream(
+    const client = await this.getClient();
+    const stream = client.messages.stream(
       {
         ...this.toAnthropicRequest(messages, options),
       },
@@ -462,10 +500,12 @@ export class AnthropicProvider extends LLMProvider {
   ): Promise<StructureResult<TSchema>> {
     const messages = this.toPromptMessages(template);
     const promptTextForEstimation = this.combinePromptText(template);
+    const client = await this.getClient();
+    const { zodOutputFormat } = await import("@anthropic-ai/sdk/helpers/zod");
 
     const response = await this.withResilience(
       (signal) =>
-        this.client.messages.parse(
+        client.messages.parse(
           {
             ...this.toAnthropicRequest(messages, options),
             stream: false, // Structured parsing doesn't support streaming
@@ -513,7 +553,8 @@ export class AnthropicProvider extends LLMProvider {
   }
 
   async fetchModels(): Promise<string[]> {
-    const response = await this.client.models.list();
+    const client = await this.getClient();
+    const response = await client.models.list();
     const data = response.data;
 
     return data.map((model) => model.id);
@@ -534,6 +575,7 @@ LLMProvider.register(
     requiresAuth: true,
     description:
       "Safety-focused AI lab behind Claude, emphasizing Constitutional AI and responsible deployment. Current models include Claude Opus 4.6 and Sonnet 4.6 — strong at reasoning, coding, and nuanced writing.",
+    requiredPeerDependency: "@anthropic-ai/sdk",
   },
   (apiKey?: string, runtimeConfig?: ProviderRuntimeConfig) => {
     if (!apiKey) {

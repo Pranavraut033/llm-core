@@ -17,7 +17,8 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
 
   async fetchModels(): Promise<string[]> {
     try {
-      const response = await this.client.models.list();
+      const client = await this.getClient();
+      const response = await client.models.list();
       return response.data.map((model) => model.id);
     } catch (error) {
       this.logger.error("Error fetching models", { error });
@@ -40,6 +41,7 @@ LLMProvider.register(
     requiresAuth: true,
     description:
       "Chinese AI lab known for strong reasoning models (DeepSeek-R1) at a fraction of the cost of comparable Western frontier models.",
+    requiredPeerDependency: "openai",
   },
   (apiKey?: string, runtimeConfig?: ProviderRuntimeConfig) => {
     if (!apiKey) {

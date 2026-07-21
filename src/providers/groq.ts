@@ -17,7 +17,8 @@ export class GroqProvider extends OpenAICompatibleProvider {
 
   async fetchModels(): Promise<string[]> {
     try {
-      const response = await this.client.models.list();
+      const client = await this.getClient();
+      const response = await client.models.list();
       return response.data.map((model) => model.id);
     } catch (error) {
       this.logger.warn("Error fetching models, using fallback list", { error });
@@ -40,6 +41,7 @@ LLMProvider.register(
     requiresAuth: true,
     description:
       "Runs open models (Llama, Mixtral, Gemma) on custom LPU hardware for extremely fast inference — often the fastest time-to-first-token of any provider.",
+    requiredPeerDependency: "openai",
   },
   (apiKey?: string, runtimeConfig?: ProviderRuntimeConfig) => {
     if (!apiKey) {

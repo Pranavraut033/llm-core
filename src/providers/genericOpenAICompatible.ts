@@ -57,7 +57,8 @@ export class GenericOpenAICompatibleProvider extends OpenAICompatibleProvider {
 
   async fetchModels(): Promise<string[]> {
     try {
-      const response = await this.client.models.list();
+      const client = await this.getClient();
+      const response = await client.models.list();
       return response.data.map((model) => model.id);
     } catch (error) {
       this.logger.error("Error fetching models", { error });

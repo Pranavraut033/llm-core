@@ -28,7 +28,8 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
   async fetchModels(): Promise<string[]> {
     try {
       this.logger.debug("Fetching models from OpenAI API");
-      const response = await this.client.models.list();
+      const client = await this.getClient();
+      const response = await client.models.list();
 
       return response.data
         .map((model) => model.id)
@@ -52,7 +53,8 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
 
   async embed(options: EmbeddingOptions): Promise<EmbeddingResult> {
     try {
-      const response = await this.client.embeddings.create({
+      const client = await this.getClient();
+      const response = await client.embeddings.create({
         model: options.model,
         input: options.input,
       });
@@ -89,6 +91,7 @@ LLMProvider.register(
     requiresAuth: true,
     description:
       "Created ChatGPT and the GPT series, widely seen as the company that kicked off the modern AI boom. Offers the GPT-4o and o-series reasoning models for consumers and via API.",
+    requiredPeerDependency: "openai",
   },
   (apiKey?: string, runtimeConfig?: ProviderRuntimeConfig) => {
     if (!apiKey) {

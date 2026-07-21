@@ -99,6 +99,30 @@ export class ProviderError extends LLMError {
   }
 }
 
+/**
+ * Thrown when a provider is constructed (or a method on it is called) but
+ * its required peer-dependency SDK (`openai`, `@anthropic-ai/sdk`,
+ * `@google/genai`) isn't installed. Distinct from `AuthError`/
+ * `ProviderError` since this is a host installation problem, not something
+ * retrying or re-authenticating fixes. Never retryable.
+ */
+export class ProviderSDKNotInstalledError extends LLMError {
+  readonly peerDependency: string;
+
+  constructor(
+    peerDependency: string,
+    provider: ProviderId,
+    cause?: unknown
+  ) {
+    super(
+      `Provider "${provider}" requires the "${peerDependency}" package, which is not installed. Run \`npm install ${peerDependency}\` to use this provider.`,
+      { provider, cause, retryable: false }
+    );
+    this.name = "ProviderSDKNotInstalledError";
+    this.peerDependency = peerDependency;
+  }
+}
+
 function hasStatus(err: unknown): err is { status: number } {
   return (
     typeof err === "object" &&

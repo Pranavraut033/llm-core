@@ -22,6 +22,9 @@ declare module "../../src/providerType" {
     "auth-required-llm": true;
     "local-only-llm": true;
     "convenience-fn-llm": true;
+    "core-stream-llm": true;
+    "sdk-available-llm": true;
+    "sdk-unavailable-llm": true;
   }
 }
 

@@ -1,18 +1,7 @@
-import {
-  Content,
-  FunctionCallingConfigMode,
-  FunctionDeclaration,
-  GenerateContentResponse,
-  GenerateContentResponseUsageMetadata,
-  GoogleGenAI,
-  Part,
-  Schema,
-  Type as SchemaType,
-} from "@google/genai";
 import z, { ZodTypeAny } from "zod";
 
 import { ProviderRuntimeConfig } from "../config";
-import { classifyProviderError } from "../errors";
+import { classifyProviderError, ProviderSDKNotInstalledError } from "../errors";
 import { createConsoleLogger } from "../logger";
 import { ResolvedPrompt } from "../prompts/types";
 import { BUILTIN_PROVIDERS, ProviderId } from "../providerType";
@@ -31,6 +20,18 @@ import {
 } from "../types";
 import { LLMProvider, StructureResult } from "./LLMProvider";
 
+import type {
+  Content,
+  FunctionCallingConfigMode as FunctionCallingConfigModeEnum,
+  FunctionDeclaration,
+  GenerateContentResponse,
+  GenerateContentResponseUsageMetadata,
+  GoogleGenAI,
+  Part,
+  Schema,
+  Type as SchemaTypeEnum,
+} from "@google/genai";
+
 /**
  * The pinned `@google/genai` SDK version's `ThinkingConfig` type only
  * declares `includeThoughts` — `thinkingBudget` is a real, documented
@@ -42,14 +43,81 @@ type GeminiThinkingConfig = {
   thinkingBudget?: number;
 };
 
+/**
+ * `@google/genai`'s `FunctionCallingConfigModeEnum` and `Type` are runtime
+ * (string) enums, not pure types — importing them as values would defeat
+ * the point of lazily loading the SDK, since merely importing this module
+ * would then require `@google/genai` to be installed. Both are declared
+ * `type`-only above; these local mirrors of their (stable, documented)
+ * string values stand in for the enum at every call site below, cast to
+ * the real enum types so callers see no difference.
+ */
+const FunctionCallingConfigModeValues = {
+  MODE_UNSPECIFIED: "MODE_UNSPECIFIED",
+  AUTO: "AUTO",
+  ANY: "ANY",
+  NONE: "NONE",
+} as const as Record<
+  "MODE_UNSPECIFIED" | "AUTO" | "ANY" | "NONE",
+  FunctionCallingConfigModeEnum
+>;
+
+const SchemaType = {
+  TYPE_UNSPECIFIED: "TYPE_UNSPECIFIED",
+  STRING: "STRING",
+  NUMBER: "NUMBER",
+  INTEGER: "INTEGER",
+  BOOLEAN: "BOOLEAN",
+  ARRAY: "ARRAY",
+  OBJECT: "OBJECT",
+} as const as Record<
+  | "TYPE_UNSPECIFIED"
+  | "STRING"
+  | "NUMBER"
+  | "INTEGER"
+  | "BOOLEAN"
+  | "ARRAY"
+  | "OBJECT",
+  SchemaTypeEnum
+>;
+
 export class GeminiProvider extends LLMProvider {
-  private client: GoogleGenAI;
+  /**
+   * Not set eagerly — real client construction is deferred to `getClient`
+   * so importing/registering `GeminiProvider` never requires the
+   * `@google/genai` package to be installed.
+   */
+  private client?: GoogleGenAI;
   private apiKey: string;
+  private clientPromise: Promise<GoogleGenAI> | null = null;
 
   constructor(apiKey: string, runtimeConfig?: ProviderRuntimeConfig) {
     super(runtimeConfig, createConsoleLogger("Gemini"));
     this.apiKey = apiKey;
-    this.client = new GoogleGenAI({ apiKey });
+  }
+
+  /**
+   * Lazily constructs (and caches) the real `@google/genai` client on
+   * first use.
+   */
+  private async getClient(): Promise<GoogleGenAI> {
+    if (this.client) return this.client;
+    if (!this.clientPromise) {
+      this.clientPromise = import("@google/genai")
+        .then(({ GoogleGenAI: GoogleGenAICtor }) => {
+          const client = new GoogleGenAICtor({ apiKey: this.apiKey });
+          this.client = client;
+          return client;
+        })
+        .catch((err: unknown) => {
+          throw new ProviderSDKNotInstalledError(
+            "@google/genai",
+            this.providerType,
+            err
+          );
+        });
+    }
+    return this.clientPromise;
   }
 
   private textGenModelRegex =
@@ -114,39 +182,42 @@ export class GeminiProvider extends LLMProvider {
     const hasTools = Boolean(options.tools?.length);
     const toolConfig = this.toGeminiToolConfig(options.toolChoice, hasTools);
 
-    return this.withResilience(
-      (signal) =>
-        this.raceWithSignal(
-          this.client.models.generateContent({
-            model: options.model,
-            contents,
-            config: {
-              temperature: options.temperature,
-              maxOutputTokens: options.maxTokens,
-              ...this.toGeminiSamplingConfig(options),
-              ...(systemInstruction ? { systemInstruction } : {}),
-              ...(hasTools
-                ? {
-                    tools: [
-                      {
-                        functionDeclarations: options.tools!.map((tool) =>
-                          this.toGeminiTool(tool)
-                        ),
-                      },
-                    ],
-                  }
-                : {}),
-              ...(toolConfig ? { toolConfig } : {}),
-            },
-          }),
-          signal
-        ),
-      {
-        signal: options.signal,
-        timeoutMs: options.timeoutMs,
-        maxRetries: options.maxRetries,
-      }
-    )
+    return this.getClient()
+      .then((client) =>
+        this.withResilience(
+          (signal) =>
+            this.raceWithSignal(
+              client.models.generateContent({
+                model: options.model,
+                contents,
+                config: {
+                  temperature: options.temperature,
+                  maxOutputTokens: options.maxTokens,
+                  ...this.toGeminiSamplingConfig(options),
+                  ...(systemInstruction ? { systemInstruction } : {}),
+                  ...(hasTools
+                    ? {
+                        tools: [
+                          {
+                            functionDeclarations: options.tools!.map((tool) =>
+                              this.toGeminiTool(tool)
+                            ),
+                          },
+                        ],
+                      }
+                    : {}),
+                  ...(toolConfig ? { toolConfig } : {}),
+                },
+              }),
+              signal
+            ),
+          {
+            signal: options.signal,
+            timeoutMs: options.timeoutMs,
+            maxRetries: options.maxRetries,
+          }
+        )
+      )
       .then((response) => {
         const content = response.text || "";
         const toolCalls = this.extractToolCalls(response);
@@ -210,7 +281,7 @@ export class GeminiProvider extends LLMProvider {
   ):
     | {
         functionCallingConfig: {
-          mode: FunctionCallingConfigMode;
+          mode: FunctionCallingConfigModeEnum;
           allowedFunctionNames?: string[];
         };
       }
@@ -218,17 +289,19 @@ export class GeminiProvider extends LLMProvider {
     if (!toolChoice || !hasTools) return undefined;
     if (toolChoice === "auto")
       return {
-        functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
+        functionCallingConfig: { mode: FunctionCallingConfigModeValues.AUTO },
       };
     if (toolChoice === "none")
       return {
-        functionCallingConfig: { mode: FunctionCallingConfigMode.NONE },
+        functionCallingConfig: { mode: FunctionCallingConfigModeValues.NONE },
       };
     if (toolChoice === "required")
-      return { functionCallingConfig: { mode: FunctionCallingConfigMode.ANY } };
+      return {
+        functionCallingConfig: { mode: FunctionCallingConfigModeValues.ANY },
+      };
     return {
       functionCallingConfig: {
-        mode: FunctionCallingConfigMode.ANY,
+        mode: FunctionCallingConfigModeValues.ANY,
         allowedFunctionNames: [toolChoice.name],
       },
     };
@@ -413,8 +486,7 @@ export class GeminiProvider extends LLMProvider {
     // true`. A genuine multi-type union Gemini can't express is handled
     // best-effort by converting the first non-null branch.
     const union = (schema.anyOf ?? schema.oneOf) as
-      | Record<string, unknown>[]
-      | undefined;
+      Record<string, unknown>[] | undefined;
     if (Array.isArray(union) && union.length > 0) {
       const isNullBranch = (branch: Record<string, unknown>) =>
         branch.type === "null";
@@ -556,8 +628,9 @@ export class GeminiProvider extends LLMProvider {
     const { contents, systemInstruction } = this.toGeminiRequest(messages);
     const hasTools = Boolean(options.tools?.length);
     const toolConfig = this.toGeminiToolConfig(options.toolChoice, hasTools);
+    const client = await this.getClient();
 
-    const response = await this.client.models.generateContentStream({
+    const response = await client.models.generateContentStream({
       model: options.model,
       contents,
       config: {
@@ -666,8 +739,9 @@ export class GeminiProvider extends LLMProvider {
     try {
       const inputs =
         typeof options.input === "string" ? [options.input] : options.input;
+      const client = await this.getClient();
 
-      const response = await this.client.models.embedContent({
+      const response = await client.models.embedContent({
         model: options.model,
         contents: inputs,
       });
@@ -701,10 +775,11 @@ export class GeminiProvider extends LLMProvider {
   ): Promise<StructureResult<TSchema>> {
     const promptText = this.combinePromptText(template);
     try {
+      const client = await this.getClient();
       const response = await this.withResilience(
         (signal) =>
           this.raceWithSignal(
-            this.client.models.generateContent({
+            client.models.generateContent({
               model: options.model,
               contents: promptText,
               config: {
@@ -786,6 +861,7 @@ LLMProvider.register(
     requiresAuth: true,
     description:
       "Google's flagship AI family, deeply integrated with Search, Docs, and Android. Gemini 2.5 Pro leads on long-context reasoning and multimodal tasks across image, audio, and video.",
+    requiredPeerDependency: "@google/genai",
   },
   (apiKey?: string, runtimeConfig?: ProviderRuntimeConfig) => {
     if (!apiKey) {

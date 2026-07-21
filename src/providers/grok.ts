@@ -20,7 +20,8 @@ export class GrokProvider extends OpenAICompatibleProvider {
 
   async fetchModels(): Promise<string[]> {
     try {
-      const response = await this.client.models.list();
+      const client = await this.getClient();
+      const response = await client.models.list();
       const models = response.data
         .map((model) => model.id)
         .filter((id) => this.textGenModelRegex.test(id));
@@ -46,6 +47,7 @@ LLMProvider.register(
     requiresAuth: true,
     description:
       "Elon Musk's AI lab xAI built Grok with real-time access to X (Twitter) data and a less filtered, more irreverent personality. Grok 3 competes directly with frontier models on coding and reasoning.",
+    requiredPeerDependency: "openai",
   },
   (apiKey?: string, runtimeConfig?: ProviderRuntimeConfig) => {
     if (!apiKey) {

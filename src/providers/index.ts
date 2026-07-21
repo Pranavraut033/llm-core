@@ -25,3 +25,5 @@ export { getProviderInstance } from "./factory";
 
 export { LLMProvider } from "./LLMProvider";
 export type { StructureResult } from "./LLMProvider";
+
+export { isProviderSDKAvailable } from "./sdkAvailability";

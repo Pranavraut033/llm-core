@@ -13,7 +13,11 @@ export interface Logger {
   error(message: string, data?: unknown): void;
 }
 
-function toPlainError(err: Error): { name: string; message: string; stack?: string } {
+function toPlainError(err: Error): {
+  name: string;
+  message: string;
+  stack?: string;
+} {
   return { name: err.name, message: err.message, stack: err.stack };
 }
 

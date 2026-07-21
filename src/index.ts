@@ -1,5 +1,5 @@
 /**
- * @resume-builder/llm-core
+ * @pranavraut033/llm-core
  *
  * Domain-agnostic multi-provider LLM core: provider registry/factory,
  * generic LLM/tool types, an injectable token usage tracker, and a
@@ -7,10 +7,10 @@
  * context and purpose vocabulary.
  *
  * - Providers (and their SDKs) are NOT registered by default — import
- *   `@resume-builder/llm-core/providers/register-builtins` to register the
- *   6 built-in providers (OpenAI, Gemini, Grok, Perplexity, Ollama,
- *   Anthropic), or register your own via `LLMProvider.register`.
- * - The prompt-template system lives under `@resume-builder/llm-core/prompts`.
+ *   `@pranavraut033/llm-core/providers/register-builtins` to register the
+ *   10 built-in providers (OpenAI, Gemini, Grok, Groq, Perplexity, Ollama,
+ *   Anthropic, DeepSeek, Mistral, OpenRouter), or register your own via `LLMProvider.register`.
+ * - The prompt-template system lives under `@pranavraut033/llm-core/prompts`.
  */
 
 export * from "./types";
@@ -24,6 +24,7 @@ export {
   TimeoutError,
   AbortError,
   ProviderError,
+  ProviderSDKNotInstalledError,
   classifyProviderError,
 } from "./errors";
 export type { LLMErrorOptions } from "./errors";
@@ -55,5 +56,6 @@ export {
   getAvailableProviderTypes,
   getProviderInstance,
   LLMProvider,
+  isProviderSDKAvailable,
 } from "./providers";
 export type { ProviderMetadata, StructureResult } from "./providers";

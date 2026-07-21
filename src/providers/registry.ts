@@ -15,6 +15,15 @@ export interface ProviderMetadata {
   isLocal?: boolean;
   description?: string;
   defaultModels?: string[];
+  /**
+   * npm package name of the optional peer-dependency SDK this provider's
+   * constructor lazily imports on first use (e.g. `"openai"`,
+   * `"@anthropic-ai/sdk"`, `"@google/genai"`). Omitted for providers that
+   * need no SDK at all (e.g. Ollama, which only uses `fetch`). Used by
+   * `isProviderSDKAvailable` to check ahead of time whether calling this
+   * provider will work without actually constructing it.
+   */
+  requiredPeerDependency?: string;
 }
 
 type ProviderConstructor = (

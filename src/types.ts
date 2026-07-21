@@ -71,13 +71,7 @@ export type TextGenerationResult = LLMResult<string>;
 // ── Primitive schema types ──────────────────────────────────────────────────
 
 export type JSONSchemaType =
-  | "string"
-  | "number"
-  | "integer"
-  | "boolean"
-  | "array"
-  | "object"
-  | "null";
+  "string" | "number" | "integer" | "boolean" | "array" | "object" | "null";
 
 export interface JSONSchemaProperty {
   // core
@@ -153,10 +147,7 @@ export interface ToolCall {
 // ── Tool choice control ─────────────────────────────────────────────────────
 
 export type ToolChoice =
-  | "auto"
-  | "none"
-  | "required"
-  | { type: "tool"; name: string };
+  "auto" | "none" | "required" | { type: "tool"; name: string };
 
 // ── LLM response ───────────────────────────────────────────────────────────
 

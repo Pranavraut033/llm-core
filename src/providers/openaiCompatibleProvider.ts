@@ -3,13 +3,10 @@
  * Hosts shared OpenAI client setup plus helpers for structured outputs and usage normalization
  * so OpenAI-like providers (OpenAI, Grok, Perplexity) avoid duplication.
  */
-import OpenAI from "openai";
-import { zodResponseFormat } from "openai/helpers/zod";
-import { CompletionUsage } from "openai/resources/completions.mjs";
 
 import { LLMProvider, StructureResult } from "./LLMProvider";
 import { ProviderRuntimeConfig } from "../config";
-import { classifyProviderError } from "../errors";
+import { classifyProviderError, ProviderSDKNotInstalledError } from "../errors";
 import { Logger } from "../logger";
 import { ResolvedPrompt } from "../prompts/types";
 import { LLMUsageInfo } from "../tokens/usageTypes";
@@ -24,7 +21,9 @@ import type {
   ToolCall,
   ToolDefinition,
 } from "../types";
+import type OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import type { CompletionUsage } from "openai/resources/completions.mjs";
 import type { ZodTypeAny } from "zod";
 
 export type OpenAIClientConfig = {
@@ -37,7 +36,15 @@ export type OpenAIMessageTool =
   OpenAI.Chat.Completions.ChatCompletionMessageToolCall;
 
 export abstract class OpenAICompatibleProvider extends LLMProvider {
-  protected readonly client: OpenAI;
+  /**
+   * Not `readonly` — tests pre-populate this with a mock client directly
+   * (`(provider as unknown as {client}).client = {...}`), which `getClient`
+   * honors by returning it as-is without ever touching the real SDK.
+   */
+  protected client?: OpenAI;
+  private readonly apiKey: string;
+  private readonly baseURL?: string;
+  private clientPromise: Promise<OpenAI> | null = null;
 
   protected constructor(
     config: OpenAIClientConfig,
@@ -45,11 +52,39 @@ export abstract class OpenAICompatibleProvider extends LLMProvider {
     fallbackLogger?: Logger
   ) {
     super(runtimeConfig, fallbackLogger);
-    this.client = new OpenAI({
-      apiKey: config.apiKey,
-      baseURL: config.baseURL,
-      dangerouslyAllowBrowser: true,
-    });
+    this.apiKey = config.apiKey;
+    this.baseURL = config.baseURL;
+  }
+
+  /**
+   * Lazily constructs (and caches) the real `openai` SDK client on first
+   * use, so merely importing/registering this provider (or any subclass —
+   * OpenAI, Grok, Perplexity, DeepSeek, Groq, Mistral, OpenRouter) never
+   * requires the `openai` package to be installed; only actually calling a
+   * method that talks to the API does.
+   */
+  protected async getClient(): Promise<OpenAI> {
+    if (this.client) return this.client;
+    if (!this.clientPromise) {
+      this.clientPromise = import("openai")
+        .then(({ default: OpenAICtor }) => {
+          const client = new OpenAICtor({
+            apiKey: this.apiKey,
+            baseURL: this.baseURL,
+            dangerouslyAllowBrowser: true,
+          });
+          this.client = client;
+          return client;
+        })
+        .catch((err: unknown) => {
+          throw new ProviderSDKNotInstalledError(
+            "openai",
+            this.providerType,
+            err
+          );
+        });
+    }
+    return this.clientPromise;
   }
 
   get streamSupported(): boolean {
@@ -267,29 +302,32 @@ export abstract class OpenAICompatibleProvider extends LLMProvider {
       return this.runStreamedLLM(messages, options);
     }
 
-    return this.withResilience(
-      (signal) =>
-        this.client.chat.completions.create(
-          {
-            model,
-            messages: this.toChatMessages(messages),
-            temperature,
-            ...this.resolveTokenParam(model, options.maxTokens),
-            ...this.toOpenAISamplingParams(options),
-            tools: options.tools?.map((tool) => this.toOpenAITool(tool)),
-            tool_choice: this.toOpenAIToolChoice(
-              options.toolChoice,
-              Boolean(options.tools?.length)
+    return this.getClient()
+      .then((client) =>
+        this.withResilience(
+          (signal) =>
+            client.chat.completions.create(
+              {
+                model,
+                messages: this.toChatMessages(messages),
+                temperature,
+                ...this.resolveTokenParam(model, options.maxTokens),
+                ...this.toOpenAISamplingParams(options),
+                tools: options.tools?.map((tool) => this.toOpenAITool(tool)),
+                tool_choice: this.toOpenAIToolChoice(
+                  options.toolChoice,
+                  Boolean(options.tools?.length)
+                ),
+              },
+              { signal }
             ),
-          },
-          { signal }
-        ),
-      {
-        signal: options.signal,
-        timeoutMs: options.timeoutMs,
-        maxRetries: options.maxRetries,
-      }
-    )
+          {
+            signal: options.signal,
+            timeoutMs: options.timeoutMs,
+            maxRetries: options.maxRetries,
+          }
+        )
+      )
       .then((completion) => {
         const content = completion.choices[0]?.message?.content ?? "";
         const rawToolCalls = completion.choices[0]?.message?.tool_calls?.filter(
@@ -341,8 +379,9 @@ export abstract class OpenAICompatibleProvider extends LLMProvider {
   ): AsyncGenerator<LLMStreamEvent> {
     const model = options.model;
     const temperature = this.resolveTemperature(model, options.temperature);
+    const client = await this.getClient();
 
-    const stream = this.client.chat.completions.stream(
+    const stream = client.chat.completions.stream(
       {
         model,
         messages: this.toChatMessages(messages),
@@ -424,10 +463,12 @@ export abstract class OpenAICompatibleProvider extends LLMProvider {
   ): Promise<StructureResult<TSchema>> {
     const messages = this.toPromptMessages(template);
     const promptTextForEstimation = this.combinePromptText(template);
+    const client = await this.getClient();
+    const { zodResponseFormat } = await import("openai/helpers/zod");
 
     const completion = await this.withResilience(
       (signal) =>
-        this.client.chat.completions.parse(
+        client.chat.completions.parse(
           {
             model: options.model,
             messages: this.toChatMessages(messages),
