@@ -24,7 +24,7 @@ import type {
 import type OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import type { CompletionUsage } from "openai/resources/completions.mjs";
-import type { ZodTypeAny } from "zod";
+import type { ZodTypeAny, output } from "zod";
 
 export type OpenAIClientConfig = {
   apiKey: string;
@@ -511,7 +511,11 @@ export abstract class OpenAICompatibleProvider extends LLMProvider {
 
     this.notifyUsage(usage, options.onUsage);
 
-    return { result: parsed, usage };
+    // parsed comes from openai's own zodResponseFormat helper, which infers
+    // its return type from a structurally-identical but separately
+    // instantiated copy of TSchema's output type — TS can't unify the two
+    // generic instantiations, so assert what zod already validated.
+    return { result: parsed as output<TSchema>, usage };
   }
 
   toOpenAITool(tool: ToolDefinition): OpenAITool {
