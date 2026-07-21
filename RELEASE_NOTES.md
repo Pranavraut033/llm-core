@@ -1,5 +1,17 @@
 # Release Notes
 
+## v0.3.0 — 2026-07-21
+
+Streaming state management and a lighter, faster-loading core.
+
+**What's new:**
+
+- **Streaming controllers and React hooks** — new `/core` and `/react` entry points (`createCompletion`, `createChat`, `createObject`, plus `useCompletion`, `useChat`, `useObject`, `useModels`) handle streaming state for you, so you don't have to hand-roll loading/error/partial-output logic for chat and completion UIs.
+- **Faster cold starts** — provider SDKs (OpenAI, Anthropic, Gemini) now load lazily, only when a provider is actually used. Importing the package, or a provider you're not using, no longer requires that provider's SDK to be installed. Check ahead of time with `isProviderSDKAvailable(providerId)`.
+- **More reliable Ollama** — fixes to streaming tool calls, thinking budgets, context window sizing, and structured output.
+
+No breaking changes — existing code keeps working as-is.
+
 ## v0.1.0 — 2026-07-12
 
 First release of `@resume-builder/llm-core`: a standalone toolkit for talking to LLM providers from any host app.
