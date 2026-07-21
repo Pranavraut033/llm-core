@@ -67,6 +67,16 @@
       "types": "./dist/prompts/index.d.ts",
       "import": "./dist/prompts/index.js",
       "require": "./dist/prompts/index.cjs"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js",
+      "require": "./dist/core/index.cjs"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.js",
+      "require": "./dist/react/index.cjs"
     }
   },
   "files": [
@@ -81,7 +91,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "bench": "node benchmarks/bench.mjs"
   },
   "dependencies": {
     "handlebars": "^4.7.8",
@@ -91,7 +102,8 @@
   "peerDependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
     "@google/genai": "^0.3.1",
-    "openai": "^6.10.0"
+    "openai": "^6.10.0",
+    "react": "^18 || ^19"
   },
   "peerDependenciesMeta": {
     "@anthropic-ai/sdk": {
@@ -102,18 +114,23 @@
     },
     "openai": {
       "optional": true
+    },
+    "react": {
+      "optional": true
     }
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
     "@google/genai": "^0.3.1",
     "@types/node": "^20",
+    "@types/react": "^19",
     "@types/uuid": "^10.0.0",
     "eslint": "^9",
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-unused-imports": "^4.3.0",
-    "openai": "^6.10.0",
+    "openai": "^6.42.0",
     "prettier": "^3.7.4",
+    "react": "^19",
     "tsup": "^8.3.0",
     "typescript": "^5",
     "typescript-eslint": "^8.20.0",

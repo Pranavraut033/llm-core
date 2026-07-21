@@ -7,6 +7,8 @@ export default defineConfig({
     "providers/openai-compatible": "src/providers/openai-compatible.ts",
     "providers/register-builtins": "src/providers/register-builtins.ts",
     "prompts/index": "src/prompts/index.ts",
+    "core/index": "src/core/index.ts",
+    "react/index": "src/react/index.ts",
   },
   format: ["esm", "cjs"],
   dts: true,
