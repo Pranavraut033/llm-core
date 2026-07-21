@@ -10,9 +10,9 @@ import { BUILTIN_PROVIDERS } from "../src/providerType";
 
 describe("isProviderSDKAvailable", () => {
   it("returns true for a provider with no requiredPeerDependency (Ollama needs no SDK)", async () => {
-    await expect(isProviderSDKAvailable(BUILTIN_PROVIDERS.OLLAMA)).resolves.toBe(
-      true
-    );
+    await expect(
+      isProviderSDKAvailable(BUILTIN_PROVIDERS.OLLAMA)
+    ).resolves.toBe(true);
   });
 
   it("returns true for a provider whose required SDK is actually installed", async () => {
@@ -21,7 +21,11 @@ describe("isProviderSDKAvailable", () => {
 
     registry.register(
       type,
-      { name: "SDK Available", requiresAuth: false, requiredPeerDependency: "zod" },
+      {
+        name: "SDK Available",
+        requiresAuth: false,
+        requiredPeerDependency: "zod",
+      },
       (apiKey?: string) => new DummyProvider(type, apiKey)
     );
 

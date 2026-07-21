@@ -109,11 +109,7 @@ export class ProviderError extends LLMError {
 export class ProviderSDKNotInstalledError extends LLMError {
   readonly peerDependency: string;
 
-  constructor(
-    peerDependency: string,
-    provider: ProviderId,
-    cause?: unknown
-  ) {
+  constructor(peerDependency: string, provider: ProviderId, cause?: unknown) {
     super(
       `Provider "${provider}" requires the "${peerDependency}" package, which is not installed. Run \`npm install ${peerDependency}\` to use this provider.`,
       { provider, cause, retryable: false }
